@@ -1,0 +1,519 @@
+---
+title: "Process bathymetry data"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+
+ps_data_path <- "/Volumes/ps-science/datasets/"
+
+ps_exp_path <- "/Volumes/Colombia - 2022/"
+
+default_font_family <- "Arial"
+
+default_font_color <- '#22211d'
+
+default_background_color <- "#f5f5f2"
+
+theme_map <- function(...) {
+  theme_minimal() +
+    theme(
+      text = element_text(family = default_font_family,
+                          color = default_font_color),
+      # remove all axes
+      # add a subtle grid
+      panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
+      panel.grid.minor = element_blank(),
+      # background colors
+      plot.background = element_rect(fill = default_background_color,
+                                     color = NA),
+      panel.background = element_rect(fill = default_background_color,
+                                      color = NA),
+      legend.background = element_rect(fill = default_background_color,
+                                       color = NA),
+      # borders and margins
+      plot.margin = unit(c(.5, .5, .2, .5), "cm"),
+      panel.border = element_blank(),
+      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+      # titles
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 9, hjust = 0,
+                                 color = default_font_color),
+      plot.title = element_text(size = 15, hjust = 0.5,
+                                color = default_font_color),
+      plot.subtitle = element_text(size = 10, hjust = 0.5,
+                                   color = default_font_color,
+                                   margin = margin(b = -0.1,
+                                                   t = -0.1,
+                                                   l = 2,
+                                                   unit = "cm"),
+                                   debug = F),
+      # captions
+      plot.caption = element_text(size = 7,
+                                  hjust = .5,
+                                  margin = margin(t = 0.2,
+                                                  b = 0,
+                                                  unit = "cm"),
+                                  color = "#939184"),
+      ...
+    )
+}
+```
+
+```{r}
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Seamounts
+
+```{r}
+clark_seamounts <- readxl::read_xls(file.path(ps_data_path, 
+                                              "seamounts-clark", "Clarketal_2011_OCM_All_seamounts_values.xls"))
+
+clark_seamounts <- clark_seamounts %>% 
+  janitor::clean_names() %>% 
+  select(id, long, lat, depth, class = smt_class_poc) %>% 
+  mutate(depth_class = ifelse(depth <= 500, "<= 500m", "> 500m"))
+
+col_smts_clark <- clark_seamounts %>% 
+  st_as_sf(coords = c("long", "lat"),
+           crs = 4326) %>% 
+  st_transform(crs = col_crs) %>% 
+  filter(st_within(., st_union(colombia_eez), sparse = FALSE)[,1])
+
+yesson_smts <- sf::read_sf(file.path(ps_data_path, 
+                                     "seamounts-yesson-2019", "YessonEtAl2019-Seamounts-V2.shp"))
+
+col_smts_yesson <- yesson_smts %>% 
+  janitor::clean_names() %>% 
+  st_transform(crs = col_crs) %>% 
+  filter(st_within(., st_union(colombia_eez), sparse = FALSE)[,1]) %>% 
+  mutate(depth_class = ifelse(depth > -500, "<= 500m", "> 500m") )
+
+col_smts <- col_smts_yesson %>%
+  transmute(id = peak_id, depth = depth, depth_class = depth_class, source = "yesson") %>% 
+  bind_rows(col_smts_clark %>% 
+              transmute(id = id, depth = -depth, depth_class, source = "clark"))
+```
+
+```{r}
+col_background_plot+
+  geom_sf(data = colombia_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = col_smts, 
+          aes(col = fct_rev(depth_class)), size = .7, show.legend = T)+
+  labs(alpha = "Profundidad", title = "Montes submarinos")+
+  coord_sf(xlim = c(as.double(st_bbox(colombia_eez)["xmin"]), as.double(st_bbox(colombia_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(colombia_eez)["ymin"]), as.double(st_bbox(colombia_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d(palette = "ochRe::lorikeet", name = "Profundidad")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "seamounts.png"), 
+         dpi = 300)
+```
+
+## Offshore Pacific
+
+```{r}
+col_background_plot +
+  geom_sf(data = col_smts %>% 
+            filter(st_within(., st_union(colombia_pacific_eez), sparse = FALSE)[,1]),
+         aes(col = fct_rev(depth_class)), size = .7)+
+  geom_sf(data = colombia_pacific_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = yurupari, fill = "transparent", col = "orange")+
+  geom_sf(data = malpelo, fill = "transparent", col = "lightblue")+
+  geom_sf(data = rois_offshore_pacific, fill = "transparent", col = "navy")+
+  labs(title = "Yurupari - Malpelo / Colinas y Lomas del Pacifico",
+       subtitle = "Montes submarinos")+
+  geom_sf(data = st_crop(col_land, colombia_pacific_eez))+
+  coord_sf(xlim = c(as.double(st_bbox(colombia_pacific_eez)["xmin"]), as.double(st_bbox(colombia_pacific_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(colombia_pacific_eez)["ymin"]), as.double(st_bbox(colombia_pacific_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true",
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d(palette = "ochRe::lorikeet", name = "Profundidad")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "seamounts_yurupari_malpelo.png"), 
+         dpi = 300, width = 7, height = 5)
+```
+
+## Regimen Comun
+
+```{r}
+col_background_plot +
+  geom_sf(data = col_smts %>% 
+            filter(st_within(., st_union(col_jam_area), sparse = FALSE)[,1]),
+          aes(col = fct_rev(depth_class)), size = .7)+
+  geom_sf(data = col_jam_area, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = bajos_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  labs(title = "Montes submarinos",subtitle = "Area de Regimen Comun Colombia - Jamaica")+
+  geom_sf(data = st_crop(col_land, col_jam_area))+
+  coord_sf(xlim = c(as.double(st_bbox(col_jam_area)["xmin"]), as.double(st_bbox(col_jam_area)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(col_jam_area)["ymin"]), as.double(st_bbox(col_jam_area)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "bl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d(palette = "ochRe::lorikeet", name = "Profundidad")+
+  theme(plot.subtitle = element_text(margin = margin(t = 0, r = 0, b = .3, l = 0, unit = "pt")))+
+      ggsave(filename = file.path(ps_exp_path, "figures", "seamounts_regimen_comun.png"), 
+         dpi = 300)
+```
+
+```{r}
+all_rois <- bind_rows(rois_offshore_pacific,
+                      colombia_eez %>% 
+                        filter(pol_type == "Joint regime" | mrgid %in% c(48984, 48985)) %>% 
+                        select(region = geoname),
+                      drmi_gtcc %>% 
+                        select(region = nombre, geom = geometry))
+
+col_smts <- col_smts %>% 
+  sf::st_join(all_rois)
+```
+
+
+```{r}
+sf::st_write(col_smts, file.path(ps_exp_path, "data", "secondary", "processed","col_smts.gpkg"))
+
+col_smts %>% 
+  st_transform(crs = 4326) %>% 
+  dplyr::mutate(lon = sf::st_coordinates(.)[,1],
+                lat = sf::st_coordinates(.)[,2]) %>% 
+  select(id, lon, lat, depth, roi = region) %>% 
+  st_drop_geometry() %>% 
+  mutate_at(vars(lon, lat), round, 5)  %>% 
+  write_csv(file.path(ps_exp_path, "data", "secondary","processed", "col_smts.csv"))
+```
+
+# Mangroves
+
+```{r, eval = F}
+gmw <- read_sf(file.path(ps_data_path, "global-mangrove-watch", "GMW_2016_v2.shp"))
+
+mangroves_uac_pnch <- gmw %>% 
+  st_make_valid() %>% 
+  st_crop(uac_pnch %>% 
+            st_transform(st_crs(gmw)) %>% 
+            st_buffer(dist = 1))
+
+mangroves_uac_pnch <- mangroves_uac_pnch %>% 
+  st_transform(col_crs)
+
+write_sf(mangroves_uac_pnch, file.path(ps_exp_path, "data", "secondary","processed",  "mangroves_uac_pnch.gpkg"))
+```
+
+```{r}
+mangroves_marviva <- read_sf(file.path(ps_exp_path, "data", "secondary","raw",
+                                       "Objetos de Conservación PNCh","manglares","Manglares.shp"))%>% 
+  st_transform(col_crs)
+```
+
+```{r}
+col_background_plot+
+  geom_sf(data = st_crop(col_land, st_union(drmi_gtcc, utria)))+
+  geom_sf(data = st_crop(mangroves_marviva, st_union(drmi_gtcc, utria)), col = "transparent", fill = "darkgreen")+
+  coord_sf(xlim = c(as.double(st_bbox(st_union(drmi_gtcc, utria))["xmin"]), as.double(st_bbox(st_union(drmi_gtcc, utria))["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(st_union(drmi_gtcc, utria))["ymin"]), as.double(st_bbox(st_union(drmi_gtcc, utria))["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  labs(title = "Manglares - Golfo de Tribugá")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "mangroves_drmi_gtcc.png"), 
+         dpi = 300)
+```
+# Rocky reefs
+
+## Chasqui et al
+
+```{r}
+riscales_raw <- readxl::read_xlsx(file.path(ps_exp_path, "data", "secondary","raw", "riscales_chasqui.xlsx"))
+```
+
+```{r}
+riscales_chasqui_clean <- riscales_raw %>% 
+  janitor::clean_names() %>% 
+  mutate(source = "chasqui") %>% 
+  select(source, name = estaciones,  lon_dec = longitude_dec, lat_dec = latitude_dec) %>% 
+  mutate(lon = measurements::conv_unit(lon_dec,
+                                       from = "dec_deg",
+                                       to = "deg_dec_min"),
+         lat = measurements::conv_unit(lat_dec,
+                                       from = "dec_deg",
+                                       to = "deg_dec_min")) %>% 
+  mutate(lon = stringr::str_trunc(lon, 11, "right", ellipsis = ""),
+         lat = stringr::str_trunc(lat, 11, "right", ellipsis = ""))
+```
+
+```{r}
+chasqui_sf <- riscales_chasqui_clean %>% 
+  sf::st_as_sf(coords = c("lon_dec", "lat_dec"), 
+               crs = 4326) %>% 
+  st_transform(crs = col_crs) 
+
+chasqui_sf <- chasqui_sf %>% 
+  st_join(bind_rows(drmi_gtcc["nombre"], 
+                    utria["nombre"], 
+                    zepa["nombre"],
+                    zemp["nombre"]) %>% 
+            rename(roi = nombre),
+          left = T) 
+
+chasqui_sf <- chasqui_sf %>% 
+  replace_na(list(roi = "golfo de tribuga cabo corrientes")) 
+
+chasqui_sf <- chasqui_sf %>% 
+  cbind(st_coordinates(.)) %>%
+  arrange(desc(Y)) %>%
+  select(-X, -Y) %>% 
+  mutate(roi = if_else(row_number() <= 7, "cabo marzo", roi))
+```
+
+```{r}
+chasqui_sf %>% 
+  group_by(roi) %>% 
+  summarize(n_riscales = n())
+```
+
+## Fishermen
+
+```{r}
+riscales_tek <- read_csv(file = file.path(ps_exp_path, "data", "secondary", "raw","riscales_tek.csv")) %>% 
+  arrange(desc(lat)) %>% 
+  select(source, name, lon, lat, depth_m, depth_b) 
+
+riscales_tek <- riscales_tek %>% 
+  mutate(lon = paste0("-", lon),
+         lon_dec = as.numeric(measurements::conv_unit(lon,
+                                           from = "deg_dec_min",
+                                           to = "dec_deg")),
+         lat_dec = as.numeric(measurements::conv_unit(lat,
+                                           from = "deg_dec_min",
+                                           to = "dec_deg"))) %>% 
+  mutate_if(is.numeric,round, 4) %>% 
+  select(source, name, lon, lat, lon_dec, lat_dec, depth_m, depth_b)
+
+riscales_tek_sf <- riscales_tek %>% 
+  sf::st_as_sf(coords = c("lon_dec", "lat_dec"), 
+               crs = 4326) %>% 
+  st_transform(crs = col_crs)
+```
+
+```{r}
+riscales_sf <- bind_rows(chasqui_sf, 
+          riscales_tek_sf) %>% 
+  replace_na(list(roi = "golfo de tribuga cabo corrientes"))
+
+sf::st_write(riscales_sf, file.path(ps_exp_path, "data", "secondary", "processed","riscales.gpkg"))
+```
+
+```{r}
+riscales_sf %>% 
+  st_transform(crs = 4326) %>% 
+  dplyr::mutate(lon = sf::st_coordinates(.)[,1],
+                lat = sf::st_coordinates(.)[,2]) %>% 
+  st_drop_geometry() %>% 
+  mutate_at(vars(lon, lat), round, 5)  %>% 
+  write_csv(file.path(ps_exp_path, "data", "secondary","processed", "riscales.csv"))
+```
+
+## Marviva rocky bottom
+
+```{r}
+rocky_reefs <- sf::read_sf(file.path(ps_exp_path, "data", "secondary","raw",
+                                       "Objetos de Conservación PNCh","Arrecifes Rocosos","Arrecifesrocosos.shp")) %>% 
+  st_transform(col_crs)
+```
+
+```{r}
+gtcc_roi_bbox <- st_union(drmi_gtcc, utria) %>% 
+  st_buffer(dist = 10000) %>% 
+  st_difference(col_land) %>% 
+  st_bbox()
+
+col_background_plot+
+  geom_sf(data = st_crop(col_land, 
+                         st_union(drmi_gtcc, utria) %>% 
+                           st_buffer(dist = 10000) ))+
+  geom_sf(data = drmi_gtcc, fill = "transparent", linetype ="dashed")+
+  geom_sf(data = utria, fill = "transparent", linetype ="dashed")+
+  geom_sf(data = st_crop(mangroves_uac_pnch, st_union(drmi_gtcc, utria)), 
+          col = "transparent", fill = "darkgreen")+
+  geom_sf(data = rocky_reefs, 
+          fill = "#875632",
+          col = "transparent")+
+  geom_sf(data = filter(riscales_sf, 
+                        roi != "Zona Exclusiva de Pesca Artesanal"),
+          aes(col = source),
+          size = .7)+
+  coord_sf(xlim = c(gtcc_roi_bbox["xmin"], gtcc_roi_bbox["xmax"] + 4000), 
+           ylim = c(gtcc_roi_bbox["ymin"] + 5000, gtcc_roi_bbox["ymax"]), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  labs(title = "Manglares y arrecifes rocosos", subtitle = "Golfo de Tribugá - Cabo Corrientes", col = "")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "rocky_reefs_gtcc.png"), 
+         dpi = 300)
+
+```
+# Corals 
+
+```{r}
+allen_data_benthic <- st_read(file.path(ps_exp_path, "data", "secondary", "raw",
+                                        "Allen atlas","Benthic-Map", "benthic.geojson"))
+
+allen_data_benthic <- allen_data_benthic %>% 
+  st_transform(crs = col_crs)
+
+allen_data_geo <- st_read(file.path(ps_exp_path, "data", "secondary", "raw",
+                                    "Allen atlas","Geomorphic-Map", "geomorphic.geojson")) %>% 
+  st_transform(crs = col_crs)
+```
+
+## Serranilla
+
+```{r}
+serranilla_eez <- filter(bajos_eez, territory1 == "Serranilla Bank")
+  
+allen_data_benthic <- allen_data_benthic %>% 
+  mutate(clase = if_else(class == "Coral/Algae", "Coral/Alga",
+                         if_else(class == "Microalgal Mats", "Tapete microalgas", 
+                                 if_else(class == "Rock", "Roca", 
+                                         if_else(class == "Rubble", "Cascajo", 
+                                                 if_else(class == "Sand", "Arena", "Pastos marinos"))))))
+
+col_background_plot +
+  geom_sf(data = st_crop(allen_data_benthic, serranilla_eez),
+          aes(fill = clase), col = "transparent")+
+  geom_sf(data = serranilla_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  coord_sf(xlim = c(as.double(st_bbox(serranilla_eez)["xmin"]), as.double(st_bbox(serranilla_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(serranilla_eez)["ymin"]), as.double(st_bbox(serranilla_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "bl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_fill_paletteer_d("rcartocolor::Bold")+
+  labs(col = "", fill = "",
+       title = "Arrecife de Coral - Serranilla",
+       subtitle = "Clases béntonicas",
+       caption = "fuente: Allen Coral Atlas, 2021")+
+  theme(plot.subtitle = element_text(margin = margin(t = 0, r = 0, b = .3, l = 0, unit = "pt")))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "corals_serranilla_benthic.png"), 
+         dpi = 300, width = 7, height = 5 )
+```
+
+```{r}
+allen_data_geo <- allen_data_geo %>% 
+  mutate(clase = if_else(class == "Back Reef Slope", "Pendiente trasera",
+                         if_else(class == "Deep Lagoon", "Laguna profunda", 
+                                 if_else(class == "Inner Reef Flat", "Planicie interior", 
+                                         if_else(class == "Outer Reef Flat", "Planicie  exterior", 
+                                                 if_else(class == "Plateau", "Meseta", 
+                                                         if_else(class == "Reef Crest", "Cresta", 
+                                                                 if_else(class == "Reef Slope", "Pendiente", 
+                                                                         if_else(class == "Shallow Lagoon", "Laguna somera", 
+                                                                                 if_else(class == "Sheltered Reef Slope", 
+                                                                                         "Pendiente protegida", 
+                                                                                         "Planicie terrestre"))))))))))
+
+col_background_plot +
+  geom_sf(data = st_crop(allen_data_geo, serranilla_eez),
+          aes(fill = clase), col = "transparent")+
+  geom_sf(data = serranilla_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  coord_sf(xlim = c(as.double(st_bbox(serranilla_eez)["xmin"]), as.double(st_bbox(serranilla_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(serranilla_eez)["ymin"]), as.double(st_bbox(serranilla_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "bl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_fill_paletteer_d("rcartocolor::Bold")+
+  labs(col = "", fill = "",
+       title = "Arrecife de Coral - Serranilla",
+       subtitle = "Clases geomórficas",
+       caption = "fuente: Allen Coral Atlas, 2021")+
+  theme(plot.subtitle = element_text(margin = margin(t = 0, r = 0, b = .3, l = 0, unit = "pt")))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "corals_serranila_geomorphic.png"), 
+         dpi = 300, width = 7, height = 5 )
+```
+
+## Bajo Nuevo
+
+```{r}
+bajo_nuevo_eez <- filter(bajos_eez,
+                 territory1 == "Bajo Nuevo Bank")
+
+col_background_plot +
+  geom_sf(data = st_crop(allen_data_benthic, bajo_nuevo_eez),
+          aes(fill = clase), col = "transparent")+
+  geom_sf(data = bajo_nuevo_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  coord_sf(xlim = c(as.double(st_bbox(bajo_nuevo_eez)["xmin"]), as.double(st_bbox(bajo_nuevo_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(bajo_nuevo_eez)["ymin"]), as.double(st_bbox(bajo_nuevo_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "bl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_fill_paletteer_d("rcartocolor::Bold")+
+  labs(col = "", fill = "",
+       title = "Arrecife de Coral - Bajo Nuevo",
+       subtitle = "Clases béntonicas",
+       caption = "fuente: Allen Coral Atlas, 2021")+
+  theme(plot.subtitle = element_text(margin = margin(t = 0, r = 0, b = .3, l = 0, unit = "pt")))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "corals_bajo_nuevo_benthic.png"), 
+         dpi = 300, width = 7, height = 5 )
+```
+
+```{r}
+col_background_plot +
+  geom_sf(data = st_crop(allen_data_geo, bajo_nuevo_eez),
+          aes(fill = clase), col = "transparent")+
+  geom_sf(data = bajo_nuevo_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  coord_sf(xlim = c(as.double(st_bbox(bajo_nuevo_eez)["xmin"]), as.double(st_bbox(bajo_nuevo_eez)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(bajo_nuevo_eez)["ymin"]), as.double(st_bbox(bajo_nuevo_eez)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.02, units =  "native"), pad_x = unit(0.02, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "bl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_fill_paletteer_d("rcartocolor::Bold")+
+  labs(col = "", fill = "",
+       title = "Arrecife de Coral - Bajo Nuevo",
+       subtitle = "Clases geomórficas",
+       caption = "fuente: Allen Coral Atlas, 2021")+
+  theme(plot.subtitle = element_text(margin = margin(t = 0, r = 0, b = .3, l = 0, unit = "pt")))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "corals_bajo_nuevo_geomorphic.png"), 
+         dpi = 300, width = 7, height = 5 )
+```

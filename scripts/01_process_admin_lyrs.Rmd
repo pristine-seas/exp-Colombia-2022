@@ -1,0 +1,557 @@
+---
+title: "Process admin data"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+```
+
+```{r}
+ps_data_path <- "/Volumes/ps-science/datasets/"
+
+ps_exp_path <- "/Volumes/Colombia - 2022/"
+
+default_font_family <- "Arial"
+
+default_font_color <- '#22211d'
+
+default_background_color <- "#f5f5f2"
+
+theme_map <- function(...) {
+  theme_minimal() +
+    theme(
+      text = element_text(family = default_font_family,
+                          color = default_font_color),
+      # remove all axes
+      # add a subtle grid
+      panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
+      panel.grid.minor = element_blank(),
+      # background colors
+      plot.background = element_rect(fill = default_background_color,
+                                     color = NA),
+      panel.background = element_rect(fill = default_background_color,
+                                      color = NA),
+      legend.background = element_rect(fill = default_background_color,
+                                       color = NA),
+      # borders and margins
+      plot.margin = unit(c(.5, .5, .2, .5), "cm"),
+      panel.border = element_blank(),
+      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+      # titles
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 9, hjust = 0,
+                                 color = default_font_color),
+      plot.title = element_text(size = 15, hjust = 0.5,
+                                color = default_font_color),
+      plot.subtitle = element_text(size = 10, hjust = 0.5,
+                                   color = default_font_color,
+                                   margin = margin(b = -0.1,
+                                                   t = -0.1,
+                                                   l = 2,
+                                                   unit = "cm"),
+                                   debug = F),
+      # captions
+      plot.caption = element_text(size = 7,
+                                  hjust = .5,
+                                  margin = margin(t = 0.2,
+                                                  b = 0,
+                                                  unit = "cm"),
+                                  color = "#939184"),
+      ...
+    )
+}
+```
+
+# Land
+
+```{r}
+departments <- st_read(file.path(ps_exp_path, "data/secondary/raw/departamentos_202110.gpkg"))
+
+col_crs <- st_crs(departments)
+
+choco_dept <- departments %>% 
+  filter(DeNombre == "Chocó")
+
+sai_dept <- departments %>% 
+  filter(DeNombre == "San Andrés Providencia y Santa Catalina")
+
+col_land <- st_union(departments) %>% 
+  st_simplify(dTolerance = 100)
+```
+
+```{r, eval = F}
+dem <- raster("../../../data/secondary/raw/col_dem_hr.tif")
+
+dem_agg <- dem %>% 
+  raster::aggregate(fact = 100, fun = "mean")
+
+dem_agg <- dem_agg %>% 
+  projectRaster(crs = crs(departments))
+
+dem_agg_crop <- dem_agg %>% 
+  raster::mask(departments)
+```
+
+```{r, eval = F}
+col_dem <- raster(file.path(ps_exp_path, "data/secondary/raw/col_dem_lr_crop.tif"))
+
+slope <- col_dem %>% 
+  raster::terrain(opt = 'slope')
+
+aspect <- col_dem %>% 
+  raster::terrain(opt = 'aspect')
+
+hill <- hillShade(slope, aspect, 40, 270)
+```
+
+```{r}
+col_hill_df <- hill %>% 
+  raster::as.data.frame(xy = T) %>% 
+  set_names(c("lon", "lat", "dem")) %>% 
+  filter(!is.na(dem)) 
+  
+col_background_plot <- ggplot() + 
+  geom_raster(data = col_hill_df, 
+              aes(x = lon, y = lat, alpha = dem))+
+  scale_alpha(name = "", range = c(0.6, 0), guide = F)+
+  theme(legend.key.height  = unit(.02,"cm"),
+        axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"))+
+  labs(x = "", y = "")+
+  theme_map()
+```
+
+# EEZ
+
+```{r}
+col_eez_area_ha <- 92866000
+
+world_eezs <- sf::st_read(file.path(ps_data_path, "marine-regions", "eez_v11.gpkg")) %>%
+  sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
+  janitor::clean_names()
+
+world_eezs_info <- world_eezs %>%
+  st_drop_geometry()
+
+colombia_eez <- world_eezs %>% 
+  filter(sovereign1 == "Colombia" | mrgid == 21792) %>% 
+  filter(mrgid != 48971) 
+
+colombia_eez <- colombia_eez %>% 
+  st_transform(crs = col_crs)
+
+bajos_eez <- colombia_eez %>% 
+  filter(mrgid %in% c(48985, 48984)) 
+```
+
+```{r}
+north_pacific_ocean <-sf::st_read(file.path(ps_data_path, "marine-regions", "global_oceans_v01.gpkg")) %>% 
+  filter(name %in% c("North Pacific Ocean")) %>% 
+  sf::st_make_valid() %>% 
+  sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
+  sf::st_simplify(preserveTopology = T, dTolerance = 100) %>% 
+  st_transform(crs = col_crs)
+
+colombia_pacific_eez <- colombia_eez %>% 
+  st_intersection(st_buffer(north_pacific_ocean, 0.05))
+
+colombia_caribe_eez <- colombia_eez %>% 
+  st_difference(st_buffer(north_pacific_ocean, 0.05))
+```
+
+# Coastline
+
+```{r, eval = F}
+coastline <- sf::st_read(file.path(ps_data_path, "gshhg-shp-2.3.7", "GSHHS_shp", "f", "GSHHS_f_L1.shp"))
+
+coastline <- coastline %>% 
+  filter(id == 3) %>% # filter for south america
+  st_make_valid() %>% 
+  st_transform(st_crs(colombia_eez)) %>% 
+  st_crop(colombia_eez)
+
+plot(coastline)
+```
+
+# MPAs
+
+```{r}
+protected_areas_info <- readxl::read_xlsx(file.path(ps_exp_path, "data", "secondary",
+                                                    "raw","reporte_areas_2021-10-12.xlsx")) %>% 
+  janitor::clean_names()
+
+marine_protected_areas_info <- protected_areas_info %>% 
+  filter(extension_maritima_acto_administrativo_en_hectareas > 0 | extension_maritima_geografica_en_hectareas > 0) 
+
+marine_protected_areas_info %>% 
+  summarize(area_protegida_marina_ha = sum(extension_maritima_geografica_en_hectareas, na.rm = T))
+```
+
+```{r}
+marine_protected_areas_info %>% 
+  group_by(categoria_de_uicn) %>% 
+  summarize(n_areas = n(),
+            area_protegida_marina_ha  = sum(extension_maritima_geografica_en_hectareas, na.rm = T),
+            percent_of_eez = 100*area_protegida_marina_ha/col_eez_area_ha)
+```
+
+```{r}
+marine_protected_areas_info %>% 
+  mutate(nombre_de_la_autoridad_ambiental = if_else(nombre_de_la_autoridad_ambiental %in% 
+                                                      c("CODECHOCÓ", "CORPOGUAJIRA", "CORPOURABÁ", "CVS", "CRC", "CARSUCRE", "CVC", "CORALINA", "CAR"), 
+                                                    "CAR", 
+                                                    nombre_de_la_autoridad_ambiental)) %>% 
+  group_by(categoria_de_manejo, categoria_de_uicn, nombre_de_la_autoridad_ambiental) %>% 
+  summarize(n_mpas = n(),
+            area_ha = sum(extension_maritima_geografica_en_hectareas, na.rm = T),
+            percent_eez = round(100*area_ha/col_eez_area_ha, 1))%>% 
+  arrange(desc(area_ha))
+```
+```{r}
+marine_protected_areas_info %>% 
+  group_by(categoria_de_uicn) %>% 
+  summarize(n_mpas = n(),
+            area_ha = sum(extension_maritima_geografica_en_hectareas, na.rm = T)) %>% 
+  arrange(desc(area_ha)) %>% 
+  ungroup() %>% 
+  mutate(area_ha/sum(area_ha),
+         area_ha/col_eez_area_ha)
+```
+
+
+```{r}
+marine_protected_areas_info %>% 
+  filter(categoria_de_uicn %in% c("II Parque nacional", "Ib Área silvesre")) %>% 
+  arrange(desc(extension_maritima_geografica_en_hectareas))
+
+marine_protected_areas_info %>% 
+  filter(categoria_de_manejo %in% c("Distritos Nacionales de Manejo Integrado")) %>% 
+  arrange(desc(extension_maritima_geografica_en_hectareas))
+```
+```{r}
+marine_protected_areas_info <- marine_protected_areas_info %>% 
+  mutate(nombre_del_area_protegida = stringi::stri_trans_general(str = nombre_del_area_protegida, 
+                                                                 id = "Latin-ASCII"),
+         nombre_del_area_protegida = stringr::str_to_lower(nombre_del_area_protegida))
+```
+
+```{r}
+protected_areas <- read_sf(file.path(ps_exp_path, "data", "secondary", "raw","runap2", "runap2Polygon.shp"))
+
+mpas <- protected_areas %>%
+  mutate(nombre = stringi::stri_trans_general(str = nombre, id = "Latin-ASCII"),
+         nombre = stringr::str_to_lower(nombre)) %>% 
+  filter(nombre %in% marine_protected_areas_info$nombre_del_area_protegida | 
+           url %in% marine_protected_areas_info$url_externa) %>% 
+  left_join(marine_protected_areas_info %>% 
+              select(nombre_del_area_protegida, categoria_de_uicn), 
+            by = c("nombre" = "nombre_del_area_protegida")) %>% 
+  mutate(highly_protected = if_else(categoria_de_uicn %in% c("II Parque nacional", "Ib Área silvesre"), T, F)) %>% 
+  st_transform(crs = col_crs)
+```
+
+```{r}
+mpatlas <- sf::st_read(file.path(ps_data_path, "mpa-atlas", "MPAtlas_20201223_clean", "mpatlas_20201223_clean.shp"))
+
+highly_mpas <- mpatlas %>% 
+  filter(country == "COL") %>% 
+  mutate(highly_protected = if_else(is_mpa == 1 & status == "Designated" & implemente == 1 & no_take %in% c("All"),
+                                    T, 
+                                    F)) %>% 
+  filter(highly_protected)
+
+no_take_seaflower <- highly_mpas %>% 
+  filter(mpa_id == 68808398) %>% 
+  transmute(nombre = name, highly_protected = T) %>% 
+  st_transform(crs = col_crs)
+
+col_mpas <- mpas %>% 
+  bind_rows(no_take_seaflower)
+```
+
+```{r}
+mpas_plot <- ggplot() + 
+  geom_raster(data = col_hill_df, 
+              aes(x = lon, y = lat, alpha = dem))+
+  geom_sf(data = colombia_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_simplify(col_mpas, dTolerance = 2),
+          aes(fill = highly_protected), 
+          color = "transparent") +
+  scale_alpha(name = "", range = c(0.6, 0), guide = F)+
+  paletteer::scale_fill_paletteer_d(palette = "ggthemes::calc", 
+                                    labels = c("lightly/minimally", "fully/highly"))+
+  labs(title = "Marine Protected Areas in Colombia",
+       fill = "Protection level",y = "", x = "")+
+  annotation_scale(location = "br", width_hint = 0.2, style = "ticks",    
+                     pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  coord_sf(xlim = c(as.double(st_bbox(colombia_eez)["xmin"]), as.double(st_bbox(colombia_eez)["xmax"])+20000), 
+           ylim = c(as.double(st_bbox(colombia_eez)["ymin"]), as.double(st_bbox(colombia_eez)["ymax"])), 
+           expand = FALSE)+
+  theme_map()+
+  theme(legend.key.height  = unit(.02,"cm"),
+        axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"))
+
+ggsave(mpas_plot,
+       filename = file.path(ps_exp_path,"figures", "col_mpas.png"), 
+       dpi = 300)
+```
+
+### Seaflower
+
+```{r}
+col_jam_area <- colombia_eez %>% 
+  filter(pol_type == "Joint regime" | mrgid %in% c(48984, 48985)) %>% 
+  st_union() %>% 
+  st_as_sf() 
+
+seaflower_br <- mpatlas %>% 
+  filter(wdpa_id == 220262)%>% 
+  st_transform(crs = col_crs)
+
+mpatlas_info <- mpatlas %>% st_drop_geometry()
+
+seaflower_mpa <- mpatlas %>% 
+  filter(wdpa_id == 555636411) %>% 
+  st_transform(crs = col_crs)
+
+no_take_seaflower <- mpatlas %>% 
+  filter(mpa_id == 68808398) %>% 
+  transmute(nombre = name, highly_protected = T) %>% 
+  st_transform(crs = col_crs)
+
+seaflower_no_take <- no_take_seaflower
+
+ggplot()+
+  geom_sf(data = colombia_caribe_eez,
+          linetype = "dashed", size = .5, fill = "transparent")+
+  geom_sf(data = seaflower_br, size = .5, fill = "transparent", col = "navy")+
+  geom_sf(data = seaflower_mpa, size = .5, fill = "transparent", col = "lightblue")+
+  geom_sf(data = col_jam_area, size = .5, fill = "transparent", col = "orange")+
+  geom_sf(data = no_take_seaflower, size = .5, fill = "transparent", col = "red")+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank(),
+        legend.position = "bottom",
+        legend.title.align = 0.5)+
+  labs(title = "Zoning of the Seaflower Biosphere Reserve",
+       subtitle = "",
+       x = "", y = "")+
+  coord_sf(xlim = c(as.double(st_bbox(seaflower_br)["xmin"]),
+                    as.double(st_bbox(seaflower_br)["xmax"])+.1), 
+           ylim = c(as.double(st_bbox(seaflower_br)["ymin"]), 
+                    as.double(st_bbox(seaflower_br)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), 
+                              pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true",
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  ggsave(filename = file.path(ps_exp_path, "figures", "seaflower_mpas.png"), 
+         dpi = 300)
+```
+
+# ROIs
+
+```{r}
+uac_pnch <- read_sf(file.path(ps_exp_path, "data", "secondary", "raw","uac-pnch", "LímiteUAC.shp")) %>% 
+  st_transform(crs = col_crs) %>% 
+  janitor::clean_names()
+
+plot(uac_pnch)
+```
+
+```{r}
+col_background_plot+
+  geom_sf(data = colombia_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = col_jam_area,
+          fill = "transparent", col = "red")+
+  geom_sf(data = uac_pnch,
+          fill = "transparent", col = "orange")+
+  geom_sf(data = col_mpas %>% 
+            filter(nombre %in% c("malpelo","yurupari - malpelo")),
+          fill = "transparent", col = "navy")+
+  labs(title = "Areas de interés",
+       fill = "")+
+  coord_sf(xlim = c(as.double(st_bbox(colombia_eez)["xmin"]), as.double(st_bbox(colombia_eez)["xmax"])+20000), 
+           ylim = c(as.double(st_bbox(colombia_eez)["ymin"]), as.double(st_bbox(colombia_eez)["ymax"])), 
+           expand = FALSE)+
+  theme(plot.title.position = "plot")+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), 
+                                    width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  ggsave(filename = file.path(ps_exp_path, "figures", "rois.png"), dpi = 300)
+```
+
+```{r}
+malpelo <- col_mpas %>% 
+  filter(nombre == "malpelo")
+
+yurupari <- col_mpas %>% 
+  filter(nombre == "yurupari - malpelo")
+
+utria <- col_mpas %>% 
+               filter(nombre == "utria")
+
+drmi_gtcc <- col_mpas %>% 
+               filter(nombre == "golfo de tribuga cabo corrientes")
+```
+
+```{r}
+choco_bbox <- tribble(~longitude, ~latitude,
+                      -79.5323, 4.1676,
+                      -79.5323, 7.2124,
+                      -77.1554, 7.2124,
+                      -77.1554, 4.1676) %>% 
+  mutate(roi = "choco") %>% 
+  sf::st_as_sf(coords = c("longitude", "latitude"),
+               crs = 4326) %>% 
+  st_transform(crs = col_crs) %>% 
+  group_by(roi) %>% 
+  summarise(geometry = sf::st_combine(geometry)) %>%
+  sf::st_cast("POLYGON") %>%
+  sf::st_make_valid() 
+
+golfo_bbox <- tribble(~longitude, ~latitude,
+                      -78.0057, 5.4517,
+                      -78.0057, 6.8911,
+                      -77.2057, 6.8911,
+                      -77.2057, 5.4517) %>% 
+  mutate(roi = "choco") %>% 
+  sf::st_as_sf(coords = c("longitude", "latitude"),
+               crs = 4326) %>% 
+  st_transform(crs = col_crs) %>% 
+  group_by(roi) %>% 
+  summarise(geometry = sf::st_combine(geometry)) %>%
+  sf::st_cast("POLYGON") %>%
+  sf::st_make_valid() 
+```
+
+```{r}
+zemp <- read_sf(file.path(ps_exp_path, "data", "secondary", "raw","ZEMP", "ZEMP Min.shp")) %>% 
+  janitor::clean_names() %>% 
+  st_transform(crs = col_crs) 
+
+zepa <- read_sf(file.path(ps_exp_path, "data", "secondary", "raw", "ZEPA", "ZEPA.shp")) %>% 
+  janitor::clean_names() %>% 
+  st_transform(crs = col_crs) 
+```
+`
+
+```{r}
+col_background_plot+
+  geom_sf(data = col_land)+
+  geom_sf(data = colombia_pacific_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = col_mpas %>% filter(nombre == "utria"),
+          fill = "transparent", 
+          aes(col = "PNN Utria"))+
+  geom_sf(data = col_mpas %>% filter(nombre == "golfo de tribuga cabo corrientes"),
+          fill = "transparent", aes(col = "DRMI-GTCC"))+
+  geom_sf(data = zemp,
+          fill = "transparent", aes(col = "ZEMP"))+
+  geom_sf(data = zepa,
+          fill = "transparent", aes(col = "ZEPA"))+
+  paletteer::scale_color_paletteer_d(palette = "ochRe::lorikeet")+
+  labs(title = "Spatial management in Chocó", col = "")+
+  coord_sf(xlim = c(as.double(st_bbox(choco_bbox)["xmin"]), as.double(st_bbox(choco_bbox)["xmax"])+20000), 
+           ylim = c(as.double(st_bbox(choco_bbox)["ymin"]), as.double(st_bbox(choco_bbox)["ymax"])), 
+           expand = FALSE)+
+  ggspatial::annotation_scale(location = "bl", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  ggsave(filename = file.path(ps_exp_path, "figures", "spatial_mgmt_choco.png"), 
+         dpi = 300)
+```
+## leg  1
+ 
+```{r}
+rois_offshore_pacific <- sf::st_read(file.path(ps_exp_path, 
+                                               "data", "secondary","raw", "rois_offshore_pacific.gpkg"))
+```
+
+```{r}
+col_background_plot+
+  geom_sf(data = colombia_eez, linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = col_jam_area,
+          fill = "transparent", col = "red")+
+  geom_sf(data = uac_pnch,
+          fill = "transparent", col = "orange")+
+  geom_sf(data = rois_offshore_pacific,
+          fill = "transparent", col = "navy")+
+  labs(title = "Areas de interés",
+       fill = "")+
+  coord_sf(xlim = c(as.double(st_bbox(colombia_eez)["xmin"]), as.double(st_bbox(colombia_eez)["xmax"])+20000), 
+           ylim = c(as.double(st_bbox(colombia_eez)["ymin"]), as.double(st_bbox(colombia_eez)["ymax"])), 
+           expand = FALSE)+
+  theme(plot.title.position = "plot")+
+  ggspatial::annotation_scale(location = "br", width_hint = 0.2, style = "ticks", 
+                              pad_y = unit(0.05, units =  "native"), pad_x = unit(0.05, units =  "native") )+
+  ggspatial::annotation_north_arrow(location = "tl", which_north = "true", height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.05, "native"), pad_y = unit(0.05, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  ggsave(filename = file.path(ps_exp_path, "figures", "rois.png"), 
+         dpi = 300)
+```
+
+```{r}
+save(zepa, 
+     zemp, 
+     choco_bbox, 
+     col_crs, 
+     colombia_eez, 
+     colombia_caribe_eez, 
+     colombia_pacific_eez, 
+     col_jam_area, 
+     col_background_plot, 
+     col_hill_df, 
+     coastline, 
+     col_mpas, 
+     uac_pnch, 
+     drmi_gtcc, 
+     utria,  
+     yurupari, 
+     malpelo, 
+     bajos_eez, 
+     col_land, 
+     choco_dept, 
+     rois_offshore_pacific,
+     seaflower_br,
+     seaflower_mpa,
+     seaflower_no_take,
+     file = file.path(ps_exp_path, "data", 
+                      "secondary", "processed","admin_spatial_layers.RData"))
+```
+
+
+
+
+
+

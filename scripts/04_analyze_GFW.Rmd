@@ -1,0 +1,728 @@
+---
+title: "GFW analysis"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(bigrquery)
+library(connections)
+library(tidyverse)
+
+options(scipen = 999)
+
+ps_data_path <- "/Volumes/ps-science/datasets/"
+
+ps_exp_path <- "/Volumes/Colombia - 2022/"
+
+default_font_family <- "Arial"
+
+default_font_color <- '#22211d'
+
+default_background_color <- "#f5f5f2"
+
+theme_map <- function(...) {
+  theme_minimal() +
+    theme(
+      text = element_text(family = default_font_family,
+                          color = default_font_color),
+      # remove all axes
+      # add a subtle grid
+      panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
+      panel.grid.minor = element_blank(),
+      # background colors
+      plot.background = element_rect(fill = default_background_color,
+                                     color = NA),
+      panel.background = element_rect(fill = default_background_color,
+                                      color = NA),
+      legend.background = element_rect(fill = default_background_color,
+                                       color = NA),
+      # borders and margins
+      plot.margin = unit(c(.5, .5, .2, .5), "cm"),
+      panel.border = element_blank(),
+      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+      # titles
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 9, hjust = 0,
+                                 color = default_font_color),
+      plot.title = element_text(size = 15, hjust = 0.5,
+                                color = default_font_color),
+      plot.subtitle = element_text(size = 10, hjust = 0.5,
+                                   color = default_font_color,
+                                   margin = margin(b = -0.1,
+                                                   t = -0.1,
+                                                   l = 2,
+                                                   unit = "cm"),
+                                   debug = F),
+      # captions
+      plot.caption = element_text(size = 7,
+                                  hjust = .5,
+                                  margin = margin(t = 0.2,
+                                                  b = 0,
+                                                  unit = "cm"),
+                                  color = "#939184"),
+      ...
+    )
+}
+```
+
+```{r}
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Upload ROIs to BQ
+
+```{r}
+bq_project <- connection_open(bigquery(),
+                                project = "emlab-gcp",
+                                dataset = "ps_colombia",
+                                billing = "emlab-gcp",      
+                                use_legacy_sql = FALSE,
+                                allowLargeResults = TRUE)
+
+# bq_dataset("emlab-gcp", 
+#            "ps_colombia") %>% 
+#   bq_dataset_create()
+```
+
+Here we first upload the ROIs bbox to BQ so we filter GFW data
+
+```{r, eval = F}
+colombia_extent <- colombia_eez %>%
+  st_transform(crs = 4326) %>% 
+  st_buffer(100000) %>% 
+  st_bbox() %>% 
+  extent() %>% 
+  as('SpatialPolygons') %>% 
+  sf::st_as_sf()
+
+colombia_extent_json <- colombia_extent %>% 
+  sf::st_geometry() %>% 
+  geojsonsf::sfc_geojson()
+
+# create new table with the polygon as a string 
+
+colombia_extent_bq_table <-  bq_table(project = "emlab-gcp", 
+                                       dataset = "ps_colombia", 
+                                       table = 'col_bbox') %>% 
+  bq_table_create(fields = as_bq_fields(
+    list(
+      list(name = "geom", type = "string"),
+      bq_field("name", "string"))))
+
+# upload table to BQ 
+
+bq_table_upload(x = colombia_extent_bq_table, 
+                values = tibble(geom = colombia_extent_json, 
+                                name = "col_bbox"))
+```
+
+# AIS
+
+## Query AIS Positions
+
+```{r eval = F}
+sql_ais_positionns <- "#standardSQL
+WITH
+  ########################################
+  # Boudinng box
+    col_bbox AS (
+  SELECT
+    ST_GeogFromGeoJson(geom) AS polygon
+  FROM
+    `emlab-gcp.ps_colombia.col_bbox`
+    ),
+  # This subquery identifies good segments
+  good_segments AS (
+  SELECT
+    seg_id
+  FROM
+    `world-fishing-827.gfw_research.pipe_v20201001_segs`
+  WHERE
+    good_seg
+    AND NOT overlapping_and_short ),
+  ####################################################################
+  # Get the list of active fishing vessels that pass the noise filters
+  fishing_vessels AS (
+  SELECT
+    ssvid,
+    best_vessel_class,
+    best_flag,
+    year
+  FROM
+    `world-fishing-827.gfw_research.fishing_vessels_ssvid_v20210913` ),
+  #####################################################################
+  # This subquery fishing query gets all fishing
+  fishing AS (
+  SELECT
+    EXTRACT(year
+    FROM
+      _partitiontime) AS year,
+    ssvid,
+    lat,
+    lon,
+    nnet_score,
+    timestamp,
+    hours,
+    eez,
+    ocean
+  FROM
+    `world-fishing-827.gfw_research.pipe_v20201001_fishing`,
+    col_bbox
+    ## Here's where you unnest the regions column and pull out the region variable of interest
+    ##  LEFT JOIN maitains null rows, which may be preferable if wanting high seas for example. CROSS JOIN removes NULL ros
+  LEFT JOIN
+    UNNEST(regions.ocean) AS ocean
+  LEFT JOIN
+    UNNEST(regions.eez) AS eez
+  WHERE
+    _partitiontime BETWEEN '2016-01-01'
+    AND '2021-12-31'
+    AND ST_WITHIN(ST_GeogPoint(lon, lat), col_bbox.polygon)
+    AND speed_knots > 0
+    AND seg_id IN (
+    SELECT
+      seg_id
+    FROM
+      good_segments) )
+  #####################
+  # Return fishing data
+SELECT
+  year,
+  timestamp,
+  ssvid,
+  best_vessel_class,
+  best_flag,
+  lat,
+  lon,
+  nnet_score,
+  hours,
+  eez,
+  ocean
+FROM
+  fishing
+JOIN
+  fishing_vessels
+USING
+  (ssvid,
+    year)"
+
+
+bq_project_query("emlab-gcp",
+                 sql_ais_positionns,
+                 destination_table = bq_table(project = "emlab-gcp",
+                                              table = "ais_positions",
+                                              dataset = "ps_colombia"),
+                 use_legacy_sql = FALSE, allowLargeResults = TRUE)
+```
+
+## Vessel presence
+
+```{r}
+resolution <-  0.01
+
+vessel_presence <- tbl(bq_project, "ais_positions") %>% 
+  mutate(lat_bin = floor(lat/resolution)*resolution + 0.5*resolution,
+         lon_bin = floor(lon/resolution)*resolution + 0.5*resolution) %>% 
+  group_by(ocean, eez, ssvid, best_flag, best_vessel_class, year, lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  collect()
+
+vessel_presence_raster <- vessel_presence %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  raster::rasterFromXYZ(crs = 4326) %>% 
+  raster::projectRaster(method = "bilinear", crs = crs(malpelo)) 
+
+vessel_presence_raster[vessel_presence_raster < 0] <- 0
+
+raster::writeRaster(vessel_presence_raster,
+                    file.path(ps_exp_path, "data", "secondary", "processed", "gfw_vessel_presence.tif"), overwrite  = T)
+
+write_rds(vessel_presence,
+          file.path(ps_exp_path, "data", "secondary", "processed", "gfw_vessel_presence.rds"))
+```
+
+### Pacific 
+
+```{r}
+vessel_presence %>% 
+  filter(ocean == "pacific") %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  ggplot()+
+  geom_raster(aes(lon_bin, lat_bin, fill = hours))+
+  geom_sf(data = st_transform(colombia_pacific_eez, crs = 4326), 
+          linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_transform(yurupari, crs = 4326), 
+          fill = "transparent", col = "lightblue")+
+  geom_sf(data = st_transform(malpelo, crs = 4326), 
+          fill = "transparent", col = "navy")+
+  geom_sf(data = st_transform(rois_offshore_pacific, crs = 4326),
+          fill = "transparent", col = "gold")+
+  geom_sf(data = st_crop(col_land,
+                         colombia_pacific_eez) %>% 
+            st_transform(crs = 4326))+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Presence of fishing vessels with AIS",
+       subtitle = "2016-2020", fill = "Hours",
+       x = "", y = "")+
+  paletteer::scale_fill_paletteer_c("scico::batlow", trans = "log10")+
+  guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "gfw_presence_pacifico.png"),
+           dpi = 300, width = 7, height = 4)
+```
+
+### Seaflower 
+
+```{r}
+vessel_presence %>% 
+  filter(ocean == "atlantic") %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  ggplot()+
+  geom_raster(aes(lon_bin, lat_bin, fill = hours))+
+  geom_sf(data = st_transform(colombia_caribe_eez, crs = 4326), 
+          linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_crop(col_land,
+                         colombia_caribe_eez) %>% 
+            st_transform(crs = 4326))+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Presence of fishing vessels with AIS",
+       subtitle = "2016-2020", fill = "Hours",
+       x = "", y = "")+
+  paletteer::scale_fill_paletteer_c("scico::batlow", trans = "log10")+
+  guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    ggsave(filename = file.path(ps_exp_path, "figures", "gfw_presence_caribe.png"),
+           dpi = 300, width = 7, height = 4)
+```
+
+## Fishing activity
+
+```{r}
+fishing_activity <- tbl(bq_project, "ais_positions") %>% 
+  filter(nnet_score > 0.5) %>% 
+  mutate(lat_bin = floor(lat/resolution)*resolution + 0.5*resolution,
+         lon_bin = floor(lon/resolution)*resolution + 0.5*resolution) %>% 
+  group_by(ocean, eez, ssvid, best_flag, best_vessel_class, year, lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  collect()
+
+fishing_activity_raster <- fishing_activity %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  raster::rasterFromXYZ(crs = 4326) %>% 
+  raster::projectRaster(method = "bilinear", crs = crs(malpelo)) 
+
+raster::writeRaster(fishing_activity_raster,
+                    file.path(ps_exp_path, "data", "secondary", "processed","gfw_fishing_activity.tif"), overwrite = T)
+
+write_rds(fishing_activity,
+          file.path(ps_exp_path, "data", "secondary", "processed","gfw_fishing_activity.rds"))
+```
+
+### Pacific
+
+```{r}
+fishing_activity %>% 
+  filter(ocean == "pacific",        
+         eez == "8426") %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  ggplot()+
+  geom_raster(aes(lon_bin, lat_bin, fill = hours))+
+    geom_sf(data = st_transform(colombia_pacific_eez, crs = 4326), 
+          linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_transform(yurupari, crs = 4326), 
+          fill = "transparent", col = "lightblue")+
+  geom_sf(data = st_transform(malpelo, crs = 4326), 
+          fill = "transparent", col = "navy")+
+  geom_sf(data = st_transform(rois_offshore_pacific, crs = 4326),
+          fill = "transparent", col = "gold")+
+  geom_sf(data = st_crop(col_land,
+                         colombia_pacific_eez) %>% 
+            st_transform(crs = 4326))+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Fishing activity",
+       subtitle = "2016-2020", fill = "Hours",
+       x = "", y = "")+
+  paletteer::scale_fill_paletteer_c("scico::batlow", trans = "log10")+
+  guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    ggsave(filename = file.path(ps_exp_path, "figures", "gfw_fishing_pacifico.png"),
+           dpi = 300, width = 7, height = 4)
+```
+
+```{r}
+for(yr in unique(fishing_activity$year)){
+  
+  fishing_activity %>% 
+    filter(ocean == "pacific",        
+           eez == "8426", 
+           year == yr) %>% 
+    ggplot()+
+    geom_raster(aes(lon_bin, lat_bin, fill = hours))+
+    geom_sf(data = st_transform(colombia_pacific_eez, crs = 4326), 
+            linetype = "dashed", size = .25, fill = "transparent")+
+    geom_sf(data = st_transform(yurupari, crs = 4326), 
+            fill = "transparent", col = "lightblue")+
+    geom_sf(data = st_transform(malpelo, crs = 4326), 
+            fill = "transparent", col = "navy")+
+    # geom_sf(data = st_transform(rois_offshore_pacific, crs = 4326),
+    #         fill = "transparent", col = "gold")+
+    geom_sf(data = st_crop(col_land,
+                           colombia_pacific_eez) %>% 
+              st_transform(crs = 4326))+
+    theme_map()+
+    theme(axis.ticks = element_line(),
+          axis.text = element_text(family = "Arial"),
+          axis.title = element_text(family = "Arial"),
+          plot.title.position = "plot",
+          panel.background = element_blank())+
+    labs(title = "Esfuerzo pesquero de barcos con AIS",
+         subtitle = yr, fill = "Horas de pesca", caption = "Fuente: Global Fishing Watch",
+         x = "", y = "")+
+    paletteer::scale_fill_paletteer_c("scico::batlow", trans = "log10")+
+    guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black"))+
+    ggsave(filename = file.path(ps_exp_path, "figures", paste0("gfw_fishing_pacifico", yr, ".png")),
+           dpi = 300, width = 7, height = 4)}
+```
+
+### Caribe
+
+```{r}
+fishing_activity %>% 
+  filter(ocean == "atlantic") %>% 
+  group_by(lon_bin, lat_bin) %>% 
+  summarize(hours = sum(hours, na.rm = T)) %>% 
+  filter(hours > 0) %>% 
+  ggplot()+
+  geom_raster(aes(lon_bin, lat_bin, fill = hours))+
+  geom_sf(data = st_transform(colombia_caribe_eez, crs = 4326), 
+          linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_crop(col_land,
+                         colombia_caribe_eez) %>%
+            st_transform(crs = 4326))+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Presence of fishing vessels with AIS",
+       subtitle = "2016-2020", fill = "Hours",
+       x = "", y = "")+
+  paletteer::scale_fill_paletteer_c("scico::batlow", trans = "log10")+
+  guides(fill = guide_colorbar(frame.colour = "black", ticks.colour = "black"))
+    ggsave(filename = file.path(ps_exp_path, "figures", "gfw_presence_caribe.png"),
+           dpi = 300, width = 7, height = 4)
+```
+
+### Summary and trends
+
+```{r}
+fishing_activity %>% 
+  filter(eez == "8426" & !is.na(ocean)) %>%
+  group_by(year, ocean,best_vessel_class) %>% 
+  summarize(fishing_hours = round(sum(hours, na.rm = T),2),
+            n_vessels = n_distinct(ssvid))
+```
+
+```{r}
+fishing_activity %>% 
+  filter(eez == "8426" & !is.na(ocean)) %>%
+  group_by(year, ocean) %>% 
+  summarize(fishing_hours = sum(hours, na.rm = T),
+            n_vessels = n_distinct(ssvid)) %>% 
+  ggplot()+
+  geom_col(aes(x = year, y = fishing_hours,  fill = ocean), position = "dodge")+
+  theme_light()
+```
+```{r}
+fishing_activity %>% 
+  filter(eez == "8426" & !is.na(ocean)) %>%
+  group_by(year, ocean) %>% 
+  summarize(fishing_hours = sum(hours, na.rm = T),
+            n_vessels = n_distinct(ssvid)) %>% 
+  ggplot()+
+  geom_col(aes(x = year, y = n_vessels,  fill = ocean), position = "dodge")+
+  theme_light()
+```
+
+# SAR
+
+## Query detections
+
+```{r, eval = F}
+sql_sar_detections <- "
+WITH
+  col_bbox AS (
+  SELECT
+    ST_GeogFromGeoJson(geom) AS polygon
+  FROM
+    `emlab-gcp.ps_colombia.col_bbox`
+    ),
+  sar_data AS (
+  SELECT
+    *
+  FROM
+    `world-fishing-827.proj_global_sar.detections_cat_v20210722_*`)
+SELECT
+  * EXCEPT (polygon)
+FROM
+  sar_data,
+  col_bbox
+WHERE
+  ST_WITHIN(ST_GeogPoint(detect_lon,
+      detect_lat),
+    col_bbox.polygon)
+"
+
+bq_project_query("emlab-gcp",
+                 sql_sar_detections,
+                 destination_table = bq_table(project = "emlab-gcp",
+                                              table = "sar_detections",
+                                              dataset = "ps_colombia"),
+                 use_legacy_sql = FALSE, allowLargeResults = TRUE)
+```
+
+## Join features
+
+```{r}
+sar_detections <- tbl(bq_project, "sar_detections") %>% 
+  filter(!is_infrastructure, !repeated_object, !possible_ambiguity) %>% 
+  select(-scene_id,-is_infrastructure, -repeated_object, -elevation_m, -slope, -slope_10, -num_repeats, -possible_ambiguity, -seen_at_40m, -is_ice_scene, -TERRITORY1, -ISO_TER1, -MRGID) %>% 
+  collect()
+```
+
+```{r}
+rename_geometry <- function(g, name){
+    current = attr(g, "sf_column")
+    names(g)[names(g)==current] = name
+    st_geometry(g)=name
+    g
+}
+
+colombia_pacific_eez <- rename_geometry(colombia_pacific_eez, "geometry")
+
+colombia_caribe_eez <- rename_geometry(colombia_caribe_eez, "geometry")
+
+
+col_rois <- bind_rows(uac_pnch %>% 
+                        transmute(nombre = "UAC-PNCH"),
+                      drmi_gtcc["nombre"], 
+                      utria["nombre"], 
+                      zepa["nombre"],
+                      zemp["nombre"],
+                      yurupari["nombre"],
+                      malpelo["nombre"],
+                      seaflower_br %>% 
+                        transmute(nombre = name),
+                      colombia_pacific_eez %>% 
+                        transmute(nombre = "Pacifico EEZ"),
+                      colombia_caribe_eez %>% 
+                        transmute(nombre = if_else(mrgid == 21792, "COL-JAM joint regime",
+                                                   ifelse(mrgid == 8426,  "Caribe EEZ",
+                                                          str_extract(geoname, pattern = "(?<=\\().*(?=\\))"))))) %>% 
+  st_transform(crs = 4326)
+
+sar_detections <- sar_detections %>% 
+  sf::st_as_sf(coords = c("detect_lon", "detect_lat"), 
+               crs = 4326) %>% 
+  sf::st_join(col_rois,
+              left = T)
+
+sar_detections <- sar_detections %>% 
+  dplyr::mutate(lon = sf::st_coordinates(.)[,1],
+                lat = sf::st_coordinates(.)[,2])
+
+sar_detections %>% 
+  st_drop_geometry() %>% 
+  write_rds(file.path(ps_exp_path, "data", "secondary", "processed","gfw_sar_detects.rds"))
+
+st_write(sar_detections,
+         file.path(ps_exp_path, "data", "secondary", "processed", "gfw_sar_detects.gpkg"), append = F)
+```
+
+## Map detections
+
+### Pacific
+
+```{r}
+sar_detections %>% 
+  filter(nombre == "Pacifico EEZ") %>% 
+  mutate(matched = score > 10^-3) %>% 
+  ggplot()+
+  geom_point(aes(lon, lat, col = matched), show.legend = T, size = 0.5)+
+  geom_sf(data = st_transform(colombia_pacific_eez, crs = 4326), 
+          linetype = "dashed", size = .25, fill = "transparent")+
+  geom_sf(data = st_transform(yurupari, crs = 4326), 
+          fill = "transparent", col = "lightblue")+
+  geom_sf(data = st_transform(malpelo, crs = 4326), 
+          fill = "transparent", col = "navy")+
+  geom_sf(data = st_transform(rois_offshore_pacific, crs = 4326),
+          fill = "transparent", col = "gold")+
+  geom_sf(data = st_crop(col_land,
+                         colombia_pacific_eez) %>% 
+            st_transform(crs = 4326))+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank(),
+        legend.position = "bottom",
+        legend.title.align = 0.5)+
+  labs(title = "SAR vessel detections",
+       subtitle = "2016-2020",
+       x = "", y = "", col = "Matched to AIS")+
+  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+  guides(col = guide_legend(frame.colour = "black", 
+                               ticks.colour = "black", 
+                               title.position = "top"))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pacifico.png"), 
+         dpi = 300)
+```
+### Seaflower
+
+```{r}
+sar_detections %>% 
+  filter(nombre == "Seaflower") %>% 
+  mutate(matched = score > 10^-3) %>% 
+  ggplot()+
+  geom_point(aes(x = lon, y = lat, col = matched), 
+             show.legend = F, 
+             size = 0.25)+
+  geom_sf(data = st_transform(seaflower_br, crs = 4326), 
+          linetype = "dashed", size = .5, fill = "transparent")+
+    geom_sf(data = st_transform(col_jam_area, crs = 4326), 
+           size = .5, fill = "transparent",col = "blue")+
+    theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank(),
+        legend.position = "bottom",
+        legend.title.align = 0.5)+
+  labs(title = "Unmatched SAR vessel detections",
+       subtitle = "2016-2020",
+       x = "", y = "")+
+  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+   ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_seaflower.png"), 
+         dpi = 300)
+```
+
+### PnChoco
+
+```{r}
+sar_detections %>% 
+  filter(nombre == "UAC-PNCH") %>% 
+  mutate(matched = score > 10^-3) %>% 
+  ggplot()+
+  geom_sf(aes(col = matched), 
+          size = 0.5,
+          show.legend = F)+
+  geom_sf(data = uac_pnch, fill = "transparent", col = "black", linetype = 2)+
+  geom_sf(data = st_crop(col_land,
+                         uac_pnch) %>% 
+            st_transform(crs = 4326))+
+  geom_sf(data = st_transform(drmi_gtcc, crs = 4326), 
+          fill = "transparent", col = "navy")+
+  geom_sf(data = st_transform(zepa, crs = 4326), 
+          fill = "transparent", col = "navy", linetype = 2)+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "SAR vessel detections",
+       subtitle = "2016-2020",
+       x = "", y = "", col = "Matched to AIS")+
+  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+  guides(col = guide_legend(frame.colour = "black", 
+                               ticks.colour = "black", 
+                               title.position = "top"))+
+  ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pnch.png"), 
+         dpi = 300)
+```
+## Summary and trends
+
+```{r}
+sar_detections %>% 
+  filter(nombre == "UAC-PNCH") %>% 
+  mutate(month = lubridate::month(date, label = T)) %>% 
+  group_by(month) %>% 
+  summarise(n_detections = n_distinct(detect_id),
+            n_matched = n_distinct(detect_id[score > 10^-3])) %>% 
+  pivot_longer(cols = c("n_detections", "n_matched")) %>% 
+  ggplot()+
+  geom_col(aes(month, value, fill = name), position = "stack")+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Monthly SAR vessel detections",
+       subtitle = "Pacifico Norte Chocoano",
+       x = "", y = "", fill  = "")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pnch_monthly.png"), 
+         dpi = 300)
+```
+```{r}
+sar_detections %>% 
+  filter(nombre == "Serranilla") %>% 
+  mutate(month = lubridate::month(date, label = T)) %>% 
+  group_by(month) %>% 
+  summarise(n_detections = n_distinct(detect_id),
+            n_matched = n_distinct(detect_id[score > 10^-3])) %>% 
+  pivot_longer(cols = c("n_detections", "n_matched")) %>% 
+  ggplot()+
+  geom_col(aes(month, value, fill = name), position = "stack")+
+  theme_map()+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "Monthly SAR vessel detections",
+       subtitle = "Serranilla",
+       x = "", y = "", fill  = "")+
+  ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_serranilla_monthly.png"), 
+         dpi = 300)
+```
+
+

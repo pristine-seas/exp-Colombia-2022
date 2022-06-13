@@ -1,0 +1,165 @@
+---
+title: "Process bathymetry data"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+
+ps_data_path <- "/Volumes/ps-science/datasets/"
+
+ps_exp_path <- "/Volumes/Colombia - 2022/"
+
+default_font_family <- "Arial"
+
+default_font_color <- '#22211d'
+
+default_background_color <- "#f5f5f2"
+
+theme_map <- function(...) {
+  theme_minimal() +
+    theme(
+      text = element_text(family = default_font_family,
+                          color = default_font_color),
+      # remove all axes
+      # add a subtle grid
+      panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
+      panel.grid.minor = element_blank(),
+      # background colors
+      plot.background = element_rect(fill = default_background_color,
+                                     color = NA),
+      panel.background = element_rect(fill = default_background_color,
+                                      color = NA),
+      legend.background = element_rect(fill = default_background_color,
+                                       color = NA),
+      # borders and margins
+      plot.margin = unit(c(.5, .5, .2, .5), "cm"),
+      panel.border = element_blank(),
+      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
+      # titles
+      legend.title = element_text(size = 11),
+      legend.text = element_text(size = 9, hjust = 0,
+                                 color = default_font_color),
+      plot.title = element_text(size = 15, hjust = 0.5,
+                                color = default_font_color),
+      plot.subtitle = element_text(size = 10, hjust = 0.5,
+                                   color = default_font_color,
+                                   margin = margin(b = -0.1,
+                                                   t = -0.1,
+                                                   l = 2,
+                                                   unit = "cm"),
+                                   debug = F),
+      # captions
+      plot.caption = element_text(size = 7,
+                                  hjust = .5,
+                                  margin = margin(t = 0.2,
+                                                  b = 0,
+                                                  unit = "cm"),
+                                  color = "#939184"),
+      ...
+    )
+}
+```
+
+```{r}
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Offshore
+
+```{r}
+gebco_countours <- sf::st_read(file.path(ps_data_path, "gebco_2021-contours/gebco_2021_contours.shp"))
+
+col_gebco_contours <- gebco_countours %>% 
+  st_crop(colombia_eez %>% 
+      st_transform(st_crs(gebco_countours))) 
+
+col_gebco_contours <- col_gebco_contours %>% 
+  st_transform(col_crs)
+
+st_write(col_gebco_contours, file.path(ps_exp_path, "data", "secondary", "processed", "col_gebco_contours.gpkg"))
+
+ggplot()+
+  geom_sf(data = col_gebco_contours)
+```
+
+```{r}
+gebco_raster <- terra::rast(file.path(ps_data_path, 
+                                      "gebco-2021-sub-ice-topo", "gebco_2021_sub_ice_topo_n90.0_s0.0_w-90.0_e0.0.tif"))
+
+col_gebco <- gebco_raster %>% 
+  terra::crop(colombia_eez %>% 
+                st_transform(crs(gebco_raster)) %>% 
+                terra::vect()) %>% 
+  terra::mask(colombia_eez %>% 
+                st_transform(crs(gebco_raster)) %>% 
+                terra::vect()) %>% 
+  terra::project(crs(colombia_eez))
+
+terra::writeRaster(col_gebco, file.path(ps_exp_path, "data", "secondary", "processed", "col_gebco.tif"))
+
+plot(col_gebco)
+```
+
+# Tribuga
+
+```{r}
+#Tribuga crs 32618
+#Bajo Nuevo crs 32717
+
+# tribuga_bati <- read.table(file.path(ps_exp_path, "data", "secondary", "bathymetry", "tribuga.xyz"),
+#                            header = F, 
+#                            dec =".") %>% 
+#    sf::st_as_sf(coords = c("V1", "V2"), 
+#                  crs = 32618) %>% 
+#   stars::st_rasterize() 
+```
+
+```{r}
+tribuga_bati <- raster(file.path(ps_exp_path, "data", "secondary", "raw","bathymetry","Tribuga","tribuga_bathy_100m.tif"))
+
+plot(tribuga_bati)
+
+tribuga_interpolated <- raster::focal(tribuga_bati, w = matrix(1, nrow = 5, ncol = 5), fun=mean, NAonly = T, na.rm = T)
+
+plot(tribuga_interpolated)
+
+tribuga_interpolated <- tribuga_interpolated*-1
+
+writeRaster(tribuga_interpolated, 
+            file.path(ps_exp_path, "data", "secondary", "raw","bathymetry", "tribuga_bathy_high_res_int.tif"))
+```
+
+# Caribe
+
+```{r}
+bajo_nuevo_bati <- raster(file.path(ps_exp_path, 
+                                    "data", "secondary", "raw", "bathymetry", "Bajo Nuevo", "BajoNuevo.tif"))
+```
+
+```{r}
+serranilla_bati <- read.table(file.path(ps_exp_path, "data", "secondary", "raw","bathymetry", "Serranilla","IslaCayo_Serranilla.xyz"),
+                           header = F, 
+                           dec =".") %>% 
+   sf::st_as_sf(coords = c("V1", "V2"), 
+                 crs = 32717) %>% 
+  stars::st_rasterize() 
+
+plot(serranilla_bati)
+
+raster::focal(serranilla_bati, w = matrix(1, nrow = 5, ncol = 5), fun=mean, NAonly = T, na.rm = T)
+```
+
+
