@@ -1,0 +1,365 @@
+---
+title: "Process Sub"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# DACOR - Navigator
+
+```{r}
+dacor_to_num <- function(dacor){
+  
+  dacor[dacor == "R"] <- 1
+  dacor[dacor == "O"] <- 2
+  dacor[dacor == "C"] <- 3
+  dacor[dacor == "A"] <- 4
+  dacor[dacor == "D"] <- 5
+  dacor[is.na(dacor)] <- 0
+  
+  dacor <- round(as.numeric(dacor), 2)
+  return(dacor)
+  
+}
+
+num_to_dacor <- function(dacor_num){
+  
+  dacor_num[dacor_num > 4 & dacor_num <= 5] <- "D"
+  dacor_num[dacor_num > 3 & dacor_num <= 4] <- "A"
+  dacor_num[dacor_num > 2 & dacor_num <= 3] <- "C"
+  dacor_num[dacor_num > 1 & dacor_num <= 2] <- "O"
+  dacor_num[dacor_num <= 1] <- "R"
+  
+  dacor_cat <- as.character(dacor_num)
+  
+  return(dacor_cat)
+  
+}
+```
+
+```{r}
+navi_habs_lut <- read_csv(file.path(ps_exp_path, "data/primary/raw",
+                                             "sub", "files/navigator_sub_habitat_lut.csv")) %>% 
+  janitor::clean_names()
+```
+
+```{r}
+navi_taxa %>% 
+  select(taxon, nombre_comun) %>% 
+  left_join(sub_taxa) %>% 
+  group_by(phylum) %>% 
+  summarize(n_taxa = n_distinct(taxon))
+```
+
+## Rocky Walls
+
+```{r}
+rocky_walls <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub", "files/navigator_annotations_sala_friedlander.xlsx"),
+                                    sheet = "rocky walls")       
+
+rocky_walls <- rocky_walls %>%                                              
+  select(taxon, COL_sub_02 = "dive 2") %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  mutate(habitat = "rocky walls",
+         dacor_num = dacor_to_num(dacor)) 
+
+
+rocky_walls_dacor <- rocky_walls %>% 
+  left_join(sub_taxa, by = "taxon") %>% 
+  select(ps_station_id, habitat, phylum, taxon,  dacor, dacor_num) %>% 
+  arrange(desc(dacor_num))
+```
+
+## Hard bottom
+
+```{r}
+hard_bottom_ES_AF <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub", "files/navigator_annotations_sala_friedlander.xlsx"),
+                  sheet = "hard bottom") %>% 
+  select(taxon, COL_sub_02 = "dive 2", COL_sub_03 = "dive 3") %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "hard bottom") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num)
+
+hard_bottom_JM <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/navigator_annotations_mayorga.xlsx"), 
+                                    sheet = "hard bottom") %>% 
+  select(taxon, COL_sub_04 = "dive 4") %>% 
+  filter(!is.na(COL_sub_04)) %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "hard bottom") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num)
+
+hard_bottom_dacor <- hard_bottom_JM %>% 
+  bind_rows(hard_bottom_ES_AF) %>% 
+  arrange(desc(dacor_num))
+```
+
+```{r}
+hard_bottom_dacor %>% 
+  group_by(taxon_valid_name) %>% 
+  summarize(overall_dacor_num = mean(dacor_num)) %>% 
+  mutate(overall_dacor = num_to_dacor(overall_dacor_num))
+```
+
+## Sand with pebbles
+
+```{r}
+sand_and_pebbles <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub", "files/navigator_annotations_sala_friedlander.xlsx"), 
+                                      sheet = "sand with pebbles") %>% 
+  select(taxon, COL_sub_01 = "dive 1", COL_sub_02 = "dive 2")
+
+sand_and_pebbles_dacor <- sand_and_pebbles %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "sand with pebbles") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+    select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) %>% 
+  arrange(desc(dacor_num))
+```
+
+## Boulders
+
+```{r}
+boulders_ES_AMF <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub", "files/navigator_annotations_sala_friedlander.xlsx"), 
+                                    sheet = "boulder with ledges") %>% 
+  janitor::clean_names() %>% 
+  select(taxon, COL_sub_01 = "dive_1", COL_sub_03 = "dive_3") %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "boulder") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) 
+
+boulders_JM <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/navigator_annotations_mayorga.xlsx"), 
+                                 sheet = "boulder with ledges") %>% 
+  select(taxon, COL_sub_04 = "dive 4") %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "boulder") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) 
+
+boulders_dacor <- boulders_JM %>% 
+  bind_rows(boulders_ES_AMF) %>% 
+  arrange(desc(dacor_num))
+```
+
+## Rock and sand
+
+```{r}
+rock_and_sand_ES_AMF <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub", "files/navigator_annotations_sala_friedlander.xlsx"), 
+                                         sheet = "mixed rock and sand") %>% 
+  janitor::clean_names() %>% 
+  select(taxon, COL_sub_01 = "dive_1", COL_sub_03 = "dive_3")
+
+rock_and_sand_ES_AMF %>% 
+  janitor::get_dupes(taxon)
+
+rock_and_sand_ES_AMF <- rock_and_sand_ES_AMF %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "rock and sand") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) 
+  
+rock_and_sand_JM <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/navigator_annotations_mayorga.xlsx"), 
+                                      sheet = "mixed rock and sand") %>% 
+  select(taxon, COL_sub_04 = "dive 4") %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "rock and sand") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) 
+
+rock_and_sand_dacor <- rock_and_sand_JM %>% 
+  bind_rows(rock_and_sand_ES_AMF)%>% 
+  arrange(desc(dacor_num))
+```
+
+## Sand
+
+```{r}
+sand <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/navigator_annotations_mayorga.xlsx"), 
+                             sheet = "sand") %>% 
+  select(taxon, COL_sub_04 = "dive 4")
+
+sand_dacor <- sand %>% 
+  pivot_longer(cols = -taxon, names_to = "ps_station_id", values_to = "dacor") %>% 
+  filter(!is.na(dacor)) %>% 
+  mutate(dacor_num = dacor_to_num(dacor),
+         habitat = "sand") %>% 
+  left_join(sub_taxa) %>% 
+  filter(!is.na(phylum)) %>% 
+  select(ps_station_id, habitat, phylum, taxon, taxon_valid_name, dacor, dacor_num) %>% 
+  arrange(desc(dacor_num))
+```
+
+## join them all
+
+```{r}
+navigator_dacor <- bind_rows(sand_dacor,
+                                 rocky_walls_dacor,
+                                 boulders_dacor, 
+                                 hard_bottom_dacor, 
+                                 sand_and_pebbles_dacor,
+                                 rock_and_sand_dacor)
+
+navigator_dacor %>% 
+  arrange(ps_station_id) %>% 
+  write_csv(file.path(ps_exp_path, "data", "primary", "processed", "sub_navigator_dacor.csv"))
+```
+
+```{r}
+navigator_dacor %>% 
+  ungroup() %>% 
+  group_by(habitat) %>% 
+  summarize(n_taxa = n_distinct(taxon),
+            n_phylum = n_distinct(phylum))
+```
+
+```{r}
+navigator_dacor %>% 
+  ungroup() %>% 
+  group_by(habitat, phylum) %>% 
+  summarize(n_taxa = n_distinct(taxon),
+            n_phylum = n_distinct(phylum))
+```
+
+```{r}
+sub_navigator_taxa_by_habitat <- navigator_dacor %>% 
+  group_by(habitat, phylum) %>% 
+  summarize(n_taxa = n_distinct(taxon)) %>% 
+  ungroup() %>% 
+  mutate(habitat = str_replace_all(habitat, c("boulder" = "montículos de roca",
+                                              "hard bottom" = "fondos duros rocosos",
+                                              "rock and sand" = "roca y arena",
+                                              "rocky walls" = "paredes verticales rocosas",
+                                              "sand with pebbles" = "arena y cascajo",
+                                              "sand" = "arena"))) %>% 
+  ggplot()+
+  geom_col(aes(x = fct_reorder(phylum, n_taxa),
+               y = n_taxa, 
+               fill = n_taxa),
+           show.legend = F)+
+  coord_flip()+
+  facet_wrap("habitat")+
+  labs(x = "", y = "Numero de taxones")+
+  theme_light()+
+  scico::scale_fill_scico(palette = 'roma', direction = -1)
+
+ggsave(plot = sub_navigator_taxa_by_habitat,
+       filename = file.path(ps_exp_path, "figures", "sub_navigator_taxa_by_habitat.png"), 
+       dpi = 300)
+```
+
+# Lengths of H. niphobles
+
+```{r}
+niphobles_lengths <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/Hyporthodus_niphobles_lengths.xlsx")) 
+  
+mean(niphobles_lengths$size_cm)
+
+sd(niphobles_lengths$size_cm)
+
+niphobles_violin <- niphobles_lengths %>% 
+  mutate(species = "Hyporthodus niphobles") %>% 
+  ggplot()+
+  geom_violin(aes(x = species, y = size_cm))+
+  geom_jitter(aes(x = species, y = size_cm), height = 0, width = 0.1)+
+  labs(x = "", y = "Longitud (cm)", 
+       caption = "Distribución de longitud total de individuos observados en el bajo Navegador (mean = 111.0 cm, sd = 33.8 cm)")+
+  theme_light()
+
+ggsave(plot = niphobles_violin,
+       filename = file.path(ps_exp_path, "figures", "sub_navigator_Hyporthodus_niphobles_length_dist.png"), 
+       dpi = 300)
+```
+
+# Bajo Nuevo
+
+```{r}
+bn_fish_obs <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/bajo_nuevo_annotations.xlsx"),
+                  sheet = "observations") %>% 
+  filter(!is.na(taxa)) %>% 
+  select(-notes) %>% 
+  mutate(time = format(time, format = "%H:%M:%S"),
+         ps_station_id = if_else(ps_station_id == "SEA_sub_01", "COL_sub_19", "COL_sub_20"))
+```
+
+```{r}
+bn_fish_obs <- bn_fish_obs %>% 
+  left_join(sub_taxa,
+            by = c("taxa" = "taxon"))
+
+bn_fish_obs %>% 
+  filter(is.na(taxon_id))
+```
+
+```{r}
+bn_fish_obs %>% 
+  filter(!is.na(taxon_id), !is.na(family)) %>% 
+  mutate(depth_bin = cut(depth, breaks = c(0,25,50,75,100,125, 150, Inf))) %>% 
+  group_by(depth_bin, family) %>% 
+  summarise(n_taxa = n_distinct(taxa),
+            n_inds = sum(n_ind)) %>% 
+  ggplot()+
+  geom_col(aes(depth_bin, n_taxa, fill = family))+
+  coord_flip()
+```
+### New records 
+
+```{r}
+peces_sai <- readxl::read_excel(file.path(ps_exp_path, "data/secondary/raw/biodiversidad del mar de los 7 colores", "PECES_REV.xlsx")) 
+```
+
+```{r}
+bn_taxa %>% 
+  left_join(sub_taxa, by = c("taxa" = "taxon")) %>% 
+  filter(taxon_rank == "Species", !taxon_valid_name %in% peces_sai$Especie)
+```
+

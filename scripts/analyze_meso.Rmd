@@ -1,0 +1,90 @@
+---
+title: "Process Mesophotic cameras"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Meta summary
+
+## Summaries
+
+```{r}
+meso_taxa_treemap <- meso_taxa_caribe %>% 
+  filter(!is.na(class), !is.na(family)) %>% 
+  group_by(order, family) %>% 
+  summarise(weight = n()) %>% 
+  ggplot(aes(area = weight, 
+             label = family,
+             fill = order,
+             subgroup = order)) +
+  treemapify::geom_treemap(show.legend = T)+
+  treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "Fish taxa observed in mesophotic BRUVS")+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  theme(legend.position = "bottom")
+
+ggsave(plot = meso_taxa_treemap,
+       filename = file.path(ps_exp_path, "figures", "meso_taxa_treemap.png"),
+      dpi = 300, width = 9, height = 5)
+```
+
+### Max N
+
+```{r}
+meso_taxa_caribe <- read_csv(file.path(ps_exp_path, "data", "primary", "processed", "meso_taxa_resolved.csv"))
+
+meso_metadata <- read_csv(file.path(ps_exp_path, "data", "primary", "processed", "meso_meta.csv"))
+```
+
+
+```{r}
+meso_maxN_caribe <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                    "data/primary/raw",
+                                    "meso","Mesophotic_Caribbean_MaxN.xlsx")) %>% 
+  janitor::clean_names()
+
+meso_maxN_caribe <- meso_maxN_caribe %>% 
+  select(-location,  -sharks, -jacks, -snappers, -groupers, -grunts) %>% 
+  mutate(ps_station_id = paste0("COL_meso_",
+                                   formatC(readr::parse_number(bruvs_id) + 6, width = 2, flag = 0))) %>% 
+  select(ps_station_id, everything(), -bruvs_id) %>% 
+  pivot_longer(!c(ps_station_id), names_to = "taxon", values_to = 'maxN', values_drop_na = T) %>% 
+  mutate(taxon = str_to_sentence(str_replace_all(taxon, "_", " "))) %>% 
+  filter(maxN > 0)
+```
+
+```{r}
+meso_maxN_caribe %>% 
+  left_join(meso_taxa_caribe) %>% 
+  group_by(ps_station_id, family) %>% 
+  summarize(n_taxa = n_distinct(taxon_valid_name),
+            sum_max_n = sum(maxN)) %>% 
+  ggplot()+
+  geom_col(aes(x = ps_station_id, y = sum_max_n, fill = family))+
+  coord_flip()+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(12))+
+  labs(x = "", y = "", fill = "")+
+  theme_classic()
+```
+
+

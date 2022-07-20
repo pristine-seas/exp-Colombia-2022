@@ -1,0 +1,49 @@
+---
+title: "Process Dropcams"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Meta summary
+
+# Taxa summary
+
+```{r}
+dscm_taxa_treemap <- dscm_taxa %>% 
+  filter(!is.na(class), !is.na(family)) %>% 
+  group_by(order, family) %>% 
+  summarise(weight = n()) %>% 
+  ggplot(aes(area = weight, 
+             label = family,
+             fill = order,
+             subgroup = order)) +
+  treemapify::geom_treemap(show.legend = T)+
+  treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "Taxa observed in drop camera surveys")+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  theme(legend.position = "bottom")
+
+ggsave(plot = dscm_taxa_treemap,
+       filename = file.path(ps_exp_path, "figures", "dscm_taxa_treemap.png"),
+      dpi = 300, width = 9, height = 5)
+```

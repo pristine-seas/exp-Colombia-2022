@@ -1,0 +1,579 @@
+---
+title: "Process inverts census"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(tidyverse)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+uvc_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "uvc_meta.csv"))
+
+uvc_taxa <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
+  filter(method == "uvc")
+
+inverts_lut <- readxl::read_excel(file.path(ps_exp_path, 
+                                        "data", "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
+                               sheet = "All species") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(species)) %>% 
+  mutate(functional_group = str_to_sentence(category)) %>% 
+  distinct(species, functional_group)
+```
+
+# Bajo Nuevo & Serranilla
+
+## Sessile inverts
+
+### Point contacts
+
+```{r}
+caribe_pt_contacts <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "Point intercept", n_max = 144, col_names = FALSE, skip = 4 ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+caribe_pt_contacts <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                            "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                  sheet = "Point intercept", n_max = 3, col_names = FALSE ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  mutate(ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(station_number)))) %>% 
+  rename(SEA_station_number = station_number) %>% 
+  bind_cols(caribe_pt_contacts)
+
+caribe_pt_contacts <- caribe_pt_contacts %>% 
+  pivot_longer(-c(SEA_station_number, depth_m, subtransect, ps_station_id), 
+               names_to = "taxon", 
+               values_to = "pts") %>% 
+  replace_na(list(pts = 0))
+
+caribe_pt_contacts <- caribe_pt_contacts %>% 
+  left_join(uvc_meta %>% 
+      filter(location == "Caribbean") %>% 
+      distinct(ps_station_id, sublocation, habitat)) %>% 
+  select(sublocation, everything())
+```
+
+```{r}
+caribe_pt_contacts <- caribe_pt_contacts %>% 
+  left_join(uvc_taxa %>% 
+              filter(region == "Caribbean") %>% 
+              distinct(taxon, taxon_sci_name, phylum, class, order, family)) 
+
+caribe_pt_contacts %>% 
+  filter(is.na(phylum)) %>% 
+  distinct(taxon)
+
+caribe_pt_contacts <- caribe_pt_contacts %>% 
+  mutate(phylum = if_else(str_detect(taxon, "Chondrosia"), "Porifera", phylum)) 
+  
+caribe_pt_contacts %>% 
+  filter(is.na(phylum)) %>% 
+  distinct(taxon)
+
+caribe_pt_contacts <- caribe_pt_contacts %>% 
+  left_join(inverts_lut, by = c("taxon" = "species")) 
+```
+
+#### QA/QC
+
+```{r}
+caribe_pt_contacts %>% 
+  group_by(SEA_station_number, depth_m, subtransect) %>% 
+  summarize(total_pts = sum(pts)) %>% 
+  filter(total_pts != 50)
+```
+
+### % Cover
+
+```{r}
+p_cover_by_depth_strata <- caribe_pt_contacts %>% 
+  group_by(sublocation, ps_station_id, depth_m, taxon, taxon_sci_name, phylum, class, order, family) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id, depth_m) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, depth_m, taxon, p_cover, everything())
+
+p_cover_by_depth_strata %>% 
+  group_by(sublocation, depth_m) %>% 
+  summarize(n_taxa = n_distinct(taxon)) %>% 
+  mutate(depth_m = as.numeric(depth_m)) %>% 
+  ggplot()+
+  geom_point(aes(depth_m, n_taxa, col = sublocation))
+```
+
+```{r}
+p_cover_by_station_and_taxa <- caribe_pt_contacts %>% 
+  group_by(sublocation, ps_station_id, taxon, taxon_sci_name, phylum, class, 
+           order, family, functional_group) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, taxon, p_cover, everything())
+```
+
+```{r}
+p_cover_by_station_and_taxa %>% 
+  group_by(sublocation, taxon) %>% 
+  summarize(avg_p_cover = mean(p_cover),
+            sd_p_cover = sd(p_cover)) %>% 
+  arrange(desc(avg_p_cover))
+```
+
+```{r}
+p_cover_by_station_and_group <- caribe_pt_contacts %>% 
+  group_by(sublocation, ps_station_id,  functional_group) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, p_cover, everything())
+
+p_cover_by_station_and_group %>% 
+  group_by(sublocation, functional_group) %>% 
+  summarize(avg_p_cover = mean(p_cover),
+            sd_p_cover = sd(p_cover)) %>% 
+  arrange(desc(avg_p_cover)) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  pivot_wider(
+    names_from = sublocation,
+    values_from = c(avg_p_cover, sd_p_cover)
+  )
+```
+
+#### PCA
+
+```{r}
+library("FactoMineR")
+library("factoextra")
+
+p_cover_data_wide  <- p_cover_by_station_and_taxa %>% 
+  select(sublocation, ps_station_id, taxon, p_cover) %>% 
+  mutate(p_cover = sqrt(p_cover)) %>% 
+  pivot_wider(names_from = taxon, 
+              values_from = p_cover, 
+              values_fill = 0)
+
+p_cover_pca <- p_cover_data_wide %>% 
+  select(-sublocation, -ps_station_id) %>% 
+  prcomp(scale = FALSE)
+```
+
+```{r}
+fviz_eig(p_cover_pca)
+
+fviz_pca_ind(p_cover_pca,
+             col.ind = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+fviz_pca_var(p_cover_pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+fviz_pca_biplot(p_cover_pca, 
+                repel = T,
+                label = "var",
+                legend.title  = list(fill = "Clusters", 
+                                     col = "Clusters"),
+                col.var = "#2E9FDF", # Variables color
+                col.ind = as.factor(p_cover_data_wide$sublocation))# Individuals color)
+```
+
+```{r}
+p_cover_pca_plot <- fviz_pca_biplot(p_cover_pca, 
+                repel = T,
+                # Individuals
+                geom.ind = "point",
+                col.ind = p_cover_data_wide$sublocation, 
+                fill.ind = p_cover_data_wide$sublocation,
+                ellipses.alpha = 0.1,
+                pointshape = 21, pointsize = 2,
+                palette = "jco", 
+                addEllipses = T,
+                # Variables
+                alpha.var = "contrib",
+                col.var = "black",
+                #gradient.cols = "RdYlBu", 
+                legend.title = list(fill = "Location",
+                                    alpha = "Contribution"),
+                title = "PCA of percent cover",
+                caption = "note: values have been square root transformed")+
+  theme(plot.title.position = "plot")+
+  guides(col="none")
+  
+ggsave(p_cover_pca_plot, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_sessile_inverts_PCA.png"),
+       dpi = 300, width = 12, height = 10, bg='#ffffff')
+```
+
+
+### Hard corals + Palythoa
+
+```{r}
+caribe_hard_corals <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "Hard corals + Palythoa", n_max = 38, col_names = FALSE,
+                  skip = 3) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1")  %>% 
+  t() %>% 
+  as_tibble()
+
+caribe_hard_corals <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "Hard corals + Palythoa", n_max = 2, col_names = FALSE) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  set_names(c("SEA_station_number", "depth_m")) %>% 
+  mutate(SEA_station_number = formatC(as.numeric(SEA_station_number), width = 2, flag = 0),
+         ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(SEA_station_number)))) %>% 
+  bind_cols(caribe_hard_corals)
+
+caribe_hard_corals <- caribe_hard_corals %>% 
+  pivot_longer(-c(SEA_station_number, depth_m, ps_station_id), 
+               names_to = "taxon", 
+               values_to = "present") %>% 
+  replace_na(list(present = 0)) %>% 
+  filter(present == 1) %>% 
+  select(-present)
+
+caribe_hard_corals <- caribe_hard_corals %>% 
+  left_join(uvc_meta %>% 
+      filter(location == "Caribbean") %>% 
+      distinct(ps_station_id, sublocation, habitat)) %>% 
+  select(sublocation, everything()) %>% 
+    left_join(uvc_taxa %>% 
+              filter(region == "Caribbean") %>% 
+              distinct(taxon, taxon_sci_name, phylum, class, order, family))
+
+caribe_hard_corals %>% 
+  filter(is.na(phylum)) %>% 
+  distinct(taxon)
+```
+
+```{r}
+caribe_hard_corals %>% 
+  group_by(sublocation, taxon_sci_name) %>% 
+  summarize(stations_present = n_distinct(ps_station_id)) %>% 
+  ungroup() %>% 
+  left_join(caribe_hard_corals %>% 
+              group_by(sublocation) %>% 
+              summarize(n_stations = n_distinct(ps_station_id))) %>% 
+  mutate(f_ocurrence = round(stations_present/n_stations, 2)) %>% 
+  select(sublocation , taxon_sci_name, f_ocurrence) %>% 
+  arrange(desc(f_ocurrence))
+```
+
+### Taxa diversity
+
+```{r}
+caribe_sessile_taxa <- caribe_hard_corals %>% 
+  bind_rows(p_cover_by_station_and_taxa) %>% 
+  select(sublocation, ps_station_id, taxon, taxon_sci_name, phylum, class, order, family) 
+
+caribe_sessile_taxa %>% 
+  group_by(sublocation) %>% 
+  summarise(n_stations = n_distinct(ps_station_id),
+            n_families = n_distinct(family),
+            n_species = n_distinct(taxon_sci_name))
+```
+
+```{r}
+(caribe_sessile_inverts_diversity_treemap <- caribe_sessile_taxa %>% 
+  filter(!taxon %in% c("Sediment", "Barren", "Turf"), !is.na(order)) %>% 
+  group_by(sublocation, order, family) %>% 
+  summarise(weight = n_distinct(taxon))%>% 
+  ungroup() %>% 
+  filter(weight > 0) %>% 
+  ggplot(aes(area = weight, 
+             label = paste(family, weight, sep = "\n"),
+             fill = order,
+             subgroup = order)) +
+  treemapify::geom_treemap(show.legend = T)+
+  treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "Taxa diversity in underwater sessile invertebrate surveys")+
+  facet_wrap("sublocation") +
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(25))+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))+
+  theme(legend.position = "bottom"))
+
+ggsave(caribe_sessile_inverts_diversity_treemap, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_sessile_inverts_diversity_treemap.png"),
+       dpi = 300, width = 12, height = 10)
+```
+## Vagile Inverts
+
+```{r}
+caribe_vagile <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "vagile inverts", n_max = 20, col_names = FALSE,
+                  skip = 2) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1")  %>% 
+  t() %>% 
+  as_tibble()
+
+caribe_vagile <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "vagile inverts", n_max = 2, col_names = FALSE) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  set_names(c("SEA_station_number", "depth_m")) %>% 
+  mutate(SEA_station_number = formatC(as.numeric(SEA_station_number), width = 2, flag = 0),
+         ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(SEA_station_number)))) %>% 
+  bind_cols(caribe_vagile) %>% 
+  pivot_longer(-c(SEA_station_number, depth_m, ps_station_id), 
+               names_to = "taxon", 
+               values_to = "n") %>% 
+  filter(n > 0) 
+
+caribe_vagile <- caribe_vagile %>% 
+  left_join(uvc_meta %>% 
+      filter(location == "Caribbean") %>% 
+      distinct(ps_station_id, sublocation, habitat)) %>% 
+  select(sublocation, everything()) %>% 
+    left_join(uvc_taxa %>% 
+              filter(region == "Caribbean") %>% 
+              distinct(taxon, taxon_sci_name, phylum, class, order, family))
+```
+
+```{r}
+caribe_vagile %>% 
+  group_by(sublocation, taxon_sci_name) %>% 
+  summarize(stations_present = n_distinct(ps_station_id),
+            avg_density = round(mean(n), 2),
+            sd_density = round(sd(n), 2)) %>% 
+  ungroup() %>% 
+  left_join(caribe_hard_corals %>% 
+              group_by(sublocation) %>% 
+              summarize(n_stations = n_distinct(ps_station_id))) %>% 
+  mutate(f_ocurrence = round(stations_present/n_stations, 2)) %>% 
+  select(sublocation , taxon_sci_name, f_ocurrence, avg_density, sd_density) %>% 
+  arrange(desc(f_ocurrence))
+```
+```{r}
+caribe_vagile %>% 
+  write_csv(file.path(ps_exp_path, "data/primary/processed/analyses",
+                    "uvc_caribe_vagile_inverts_by_station.csv"))
+caribe_hard_corals %>% 
+  write_csv(file.path(ps_exp_path, "data/primary/processed/analyses",
+                    "uvc_caribe_hard_corals_by_station.csv"))
+
+p_cover_by_station_and_taxa %>% 
+    write_csv(file.path(ps_exp_path, "data/primary/processed/analyses",
+                    "uvc_caribe_sessile_inverts_cover_by_station.csv"))
+```
+
+# Golfo de Tribuga
+
+```{r}
+tribuga_inverts_lut <- readxl::read_excel(file.path(ps_exp_path, 
+                                        "data", "primary","raw","inverts","COL_contacts_fieldsheet.xlsx"), 
+                               sheet = "All species") %>% 
+  janitor::clean_names() %>% 
+  distinct(taxon = species, functional_group = category)
+```
+
+```{r}
+tribuga_pt_contacts <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                                   "data", "primary","raw", "inverts",
+                                                   "COL_contacts_fieldsheet.xlsx"),
+                                         sheet = "data", n_max = 51, 
+                                         col_names = FALSE, skip = 4) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+tribuga_pt_contacts <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                                   "data", "primary","raw", "inverts",
+                                                   "COL_contacts_fieldsheet.xlsx"),
+                                         sheet = "data", n_max = 3, col_names = FALSE ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  mutate(ps_station_id = paste0("COL_uvc_", station_number)) %>% 
+  bind_cols(tribuga_pt_contacts) %>% 
+  dplyr::select(ps_station_id, depth_m, subtransect, everything(), -station_number)
+
+tribuga_pt_contacts <- tribuga_pt_contacts %>% 
+  left_join(uvc_meta %>% 
+      filter(location == "Golfo de Tribuga") %>% 
+      distinct(ps_station_id, sublocation, habitat)) %>% 
+  dplyr::select(sublocation, everything())
+
+tribuga_pt_contacts <- tribuga_pt_contacts %>% 
+  pivot_longer(-c(sublocation,depth_m, subtransect, ps_station_id, habitat), 
+               names_to = "taxon", 
+               values_to = "pts") %>% 
+  replace_na(list(pts = 0))
+```
+
+```{r}
+tribuga_pt_contacts <- tribuga_pt_contacts %>% 
+  left_join(uvc_taxa %>% 
+              filter(region == "Golfo de tribuga") %>% 
+              distinct(taxon, taxon_sci_name, phylum, class, order, family)) 
+
+tribuga_pt_contacts %>% 
+  filter(is.na(phylum)) %>% 
+  distinct(taxon)
+
+tribuga_pt_contacts <- tribuga_pt_contacts %>% 
+  left_join(tribuga_inverts_lut) 
+```
+#### QA/QC
+
+
+```{r}
+tribuga_pt_contacts %>% 
+  group_by(ps_station_id, depth_m, subtransect) %>% 
+  summarize(total_pts = sum(pts)) %>% 
+  filter(total_pts != 50)
+```
+
+### % Cover
+
+```{r}
+p_cover_by_depth_strata <- tribuga_pt_contacts %>% 
+  group_by(sublocation, ps_station_id, depth_m, taxon, taxon_sci_name, phylum, class, order, family) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id, depth_m) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, depth_m, taxon, p_cover, everything())
+
+p_cover_by_depth_strata %>% 
+  group_by(sublocation, depth_m) %>% 
+  summarize(n_taxa = n_distinct(taxon)) %>% 
+  mutate(depth_m = as.numeric(depth_m)) %>% 
+  ggplot()+
+  geom_point(aes(depth_m, n_taxa, col = sublocation))
+```
+
+```{r}
+p_cover_by_station_and_taxa <- tribuga_pt_contacts %>% 
+  group_by(sublocation, ps_station_id, taxon, taxon_sci_name, phylum, class, 
+           order, family, functional_group) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, taxon, p_cover, everything())
+```
+
+```{r}
+p_cover_by_station_and_taxa %>% 
+  group_by(sublocation, taxon) %>% 
+  summarize(avg_p_cover = mean(p_cover),
+            sd_p_cover = sd(p_cover)) %>% 
+  arrange(desc(avg_p_cover))
+```
+
+```{r}
+p_cover_by_station_and_group <- tribuga_pt_contacts %>% 
+  group_by(sublocation, ps_station_id,  functional_group) %>% 
+  summarize(p_cover = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  mutate(p_cover = round(100*p_cover/sum(p_cover), 2)) %>% 
+  filter(p_cover > 0) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, p_cover, everything())
+
+p_cover_by_station_and_group %>% 
+  group_by(sublocation, functional_group) %>% 
+  summarize(avg_p_cover = mean(p_cover),
+            sd_p_cover = sd(p_cover)) %>% 
+  arrange(desc(avg_p_cover)) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  pivot_wider(
+    names_from = sublocation,
+    values_from = c(avg_p_cover, sd_p_cover)
+  )
+```
+#### PCA
+
+```{r}
+library("FactoMineR")
+library("factoextra")
+
+p_cover_data_wide  <- p_cover_by_station_and_taxa %>% 
+  select(sublocation, ps_station_id, taxon, p_cover) %>% 
+  mutate(p_cover = sqrt(p_cover)) %>% 
+  pivot_wider(names_from = taxon, 
+              values_from = p_cover, 
+              values_fill = 0)
+
+p_cover_pca <- p_cover_data_wide %>% 
+  select(-sublocation, -ps_station_id) %>% 
+  prcomp(scale = FALSE)
+```
+
+```{r}
+fviz_eig(p_cover_pca)
+
+fviz_pca_ind(p_cover_pca,
+             col.ind = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+fviz_pca_var(p_cover_pca,
+             col.var = "contrib", # Color by contributions to the PC
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE     # Avoid text overlapping
+             )
+
+fviz_pca_biplot(p_cover_pca, 
+                repel = T,
+                label = "var",
+                legend.title  = list(fill = "Clusters", 
+                                     col = "Clusters"),
+                col.var = "#2E9FDF", # Variables color
+                col.ind = "contrib")# Individuals color)
+```
+

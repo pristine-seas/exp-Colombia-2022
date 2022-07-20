@@ -1,0 +1,788 @@
+---
+title: "Process expedition metadata"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+This file reads in all metadata files from the expedition, performs data quality control, and harmonizes all the different scientific methods into one master expedition metadata file. Method specific metadata is cleaned up, harmonized, and exported as well. Here we go. 
+
+# Compile expedition metadata
+
+## Dropcams
+
+```{r}
+dscm_meta <- read_csv(file.path(ps_exp_path, 
+                                "data/primary/raw",
+                                "dscm","_DSC_Colombia_2022_DEPLOYMENT LOG.csv"), 
+                      trim_ws = T, skip_empty_rows = T) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(ps_station_id))
+
+dscm_meta <- dscm_meta %>% 
+  transmute(ps_station_id = paste0("COL_dscm_", formatC(row_number(), width = 2, flag = 0)), 
+            method = "Dropcams",
+            date = date(ymd_hm(mission_start_time_utc_yyyymmddh_hmm)),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            time_in = local_time,
+            mission_duration = mission_duration_hh_mm,
+            recording_time = total_recording_time_hh_mm,
+            lat_in = as.numeric(deployment_latitude_ddd_ddddd),
+            lon_in = as.numeric(deployment_longitude_ddd_ddddd),
+            operator = "Whitney Goodell",
+            device_id,
+            external_station_id = deployment_id_do_not_edit_this_autopopulates_from_the_next_3_columns,
+            habitat,
+            bait_type)
+
+write_csv(dscm_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "dscm_meta.csv"))
+```
+
+## Submersible
+
+```{r}
+sub_meta <- readxl::read_excel(file.path(ps_exp_path, 
+                                         "data", "primary","raw","sub","_COL_sub_metadata.xlsx")) %>% 
+  janitor::clean_names() 
+
+sub_meta <- sub_meta %>% 
+  mutate_at(vars(therm_end, therm_start), .funs = as.numeric) %>% 
+  mutate_at(vars(dive_start, resurface, bottom_time),.funs = hms::as_hms) %>% 
+  mutate(date = ymd(date),
+         dive_duration  = hms::as_hms(resurface - dive_start)) %>% 
+  mutate_at(vars(gps_bottom_start, gps_bottom_end, gps_surface_start, gps_surface_end), ~str_replace(.x, "N", "N;")) %>% 
+  separate(gps_surface_start, into = c("surface_start_lat", "surface_start_lon"), sep = ";") %>% 
+  separate(gps_surface_end, into = c("surface_end_lat", "surface_end_lon"), sep = ";") %>% 
+  separate(gps_bottom_start, into = c("bottom_start_lat", "bottom_start_lon"), sep = ";") %>% 
+  separate(gps_bottom_end, into = c("bottom_end_lat", "bottom_end_lon"), sep = ";") %>% 
+  mutate_at(vars(contains(c("lat", "lon"))), 
+            ~ str_remove_all(.x, "N|W") %>% 
+              str_squish() %>% 
+              str_replace_all(pattern = "\\'", replacement =  " ") %>% 
+              measurements::conv_unit(from = 'deg_dec_min', to = 'dec_deg') %>% 
+              as.numeric() %>% 
+              round(5)) %>% 
+    mutate_at(vars(contains(c("lon"))), 
+            ~ .x*(-1)) %>% 
+  mutate(method = "Deepsee",
+         location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla")) %>% 
+  select(ps_station_id, method, date, location, sublocation, dive_start, dive_duration, bottom_time, surface_start_lat,
+         surface_start_lon, surface_end_lat, surface_end_lon, max_depth, therm_start_depth = therm_start, 
+         therm_end_depth = therm_end, temp_at_max_depth = max_depth_temp,  deepsee_dive_number, 
+         observer_1, observer_2, pilot, dive_type) 
+
+write_csv(sub_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "sub_meta.csv"))
+```
+
+
+## Pelagic cams
+
+```{r}
+pcam_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_2022_Pelagic_Fieldsheet_2022_04_18.xlsx")) %>% 
+  janitor::clean_names()
+
+pcam_meta <- pcam_meta %>% 
+  mutate_at(vars(time_in, time_out), hms::as_hms) %>% 
+  mutate(date = lubridate::ymd(date),
+         method = "Pelagic cams",
+         operator = "Chris Thompson",
+         location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla")) %>% 
+  select(ps_station_id, ps_sample_id, method, date, location, sublocation, time_in, lon_in = long_in, lat_in, time_out, 
+         lon_out = long_out, lat_out, rig, left_cam, right_cam, bait, notes = comments, operator)
+
+write_csv(pcam_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "pcam_meta.csv"))
+```
+
+## Mesophotic bruvs
+
+```{r}
+meso_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "meso","_COL_meso_metadata.xlsx"), 
+                               sheet = "Meso") %>% 
+  janitor::clean_names() 
+
+meso_meta <- meso_meta %>% 
+  transmute(ps_station_id = paste0("COL_meso_", formatC(row_number(), width = 2, flag = 0)),
+            method = "Mesophotic bruvs",
+            date = ymd(date),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            time_in = hms::as_hms(time_in),
+            lat_in = lat, 
+            lon_in = lon,
+            depth_m = depth,
+            rig,
+            cam_l, 
+            cam_r,
+            operator = "Molly Timmers",
+            notes)
+
+write_csv(meso_meta, file.path(ps_exp_path,
+                               "data", "primary", "processed/metadata", "meso_meta.csv"))
+```
+
+## E-DNA
+
+```{r}
+edna_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "edna","_COL_meso_metadata.xlsx"), 
+                               sheet = "Metadata") %>% 
+  janitor::clean_names() 
+
+edna_meta <- edna_meta %>% 
+  mutate_at(vars(collection_time, filter_time), hms::as_hms) %>% 
+  mutate(depth_m = round(if_else(str_detect(depth_m, "ft"),
+                                 parse_number(depth_m)*0.3048,
+                                 parse_number(depth_m)),
+                         2)) %>% 
+  transmute(ps_station_id, 
+            ps_sample_id,
+            sampling_method = "E-DNA",
+            date = ymd(date),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            collection_time,
+            lat, 
+            lon,
+            depth_m ,
+            n_replicates,
+            water_quantity_liters,
+            filter_type,
+            site_photos,
+            mosaics,
+            operator = "Molly Timmers",
+            notes) 
+
+edna_meta <- edna_meta %>%
+  mutate(collection_time = if_else(collection_time < hms("07:00:00") | collection_time > hms("12:00:00"),
+                                   paste(collection_time, "pm"), 
+                                   paste(collection_time, "am"))) %>% 
+  mutate(collection_time = hms::as_hms(lubridate::ymd_hms(paste(date, collection_time))))
+
+write_csv(edna_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "edna_meta.csv"))
+```
+
+## Seabird surveys
+
+```{r}
+birds_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                          "data/primary/raw",
+                                          "birds","Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                                sheet = "Transect meta") %>% 
+  janitor::clean_names() 
+
+birds_meta <- birds_meta %>% 
+  transmute(ps_station_id, 
+            method = "Seabird transects",
+            date = ymd(date),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            time_start = hms::as_hms(time_start),
+            duration_mins,
+            lat_start,
+            long_start,
+            lat_stop = as.numeric(lat_stop),
+            long_stop,
+            distance_km, 
+            paired_pelagic, 
+            string, 
+            drop_pickup, 
+            vessel, 
+            observer = "Chris Thompson")
+
+write_csv(birds_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "birds_meta.csv"))
+```
+
+## Underwater visual census
+
+```{r}
+uvc_meta_pacifico <- readxl::read_excel(file.path(ps_exp_path, 
+                                                  "data", "primary","raw","fish","tribuga_fish_metadata.xlsx")) %>% 
+  janitor::clean_names() 
+
+uvc_meta_caribe <- readxl::read_excel(file.path(ps_exp_path, 
+                                                "data", "primary","raw","fish","SEA_fish_metadata.xlsx")) %>% 
+  janitor::clean_names() 
+
+uvc_meta <- uvc_meta_pacifico %>% 
+  bind_rows(uvc_meta_caribe)
+
+uvc_meta <- uvc_meta %>% 
+  transmute(ps_station_id = paste0("COL_uvc_", formatC(row_number(), width = 2, flag = 0)),
+            date = ymd(date),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            time = hms::as_hms(time),
+            lat, 
+            lon,
+            habitat, 
+            viz_m)
+```
+
+### fish 
+
+```{r}
+fish_transects_pacifico <- readxl::read_excel(file.path(ps_exp_path, 
+                                                        "data", "primary","raw","fish","tribuga_fish_data_final.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  distinct(ps_station_id, depth_m, diver) 
+
+fish_transects_caribe <- readxl::read_excel(file.path(ps_exp_path, 
+                                                      "data", "primary","raw","fish","SEA_fish_final.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  distinct(ps_station_id, depth_m, diver) 
+
+fish_transects <- bind_rows(fish_transects_pacifico, 
+                            fish_transects_caribe) %>% 
+  arrange(ps_station_id) %>% 
+  group_by(ps_station_id, diver) %>% 
+  summarize(depth_m = round(mean(depth_m))) %>% 
+  mutate(sampling_method = "Fish visual census") %>% 
+  group_by(ps_station_id) %>% 
+  mutate(station_number = formatC(cur_group_id(), width = 2, flag = 0)) %>% 
+  ungroup() %>% 
+  mutate(ps_station_id = paste0("COL_uvc_", station_number)) %>% 
+  select(ps_station_id, sampling_method, depth_m, diver) 
+```
+
+### invert contacts
+
+```{r}
+invert_contacts_pacifico <- readxl::read_excel(file.path(ps_exp_path, 
+                                                         "data", "primary","raw","inverts","COL_contacts_fieldsheet.xlsx"), 
+                                               sheet = "data",
+                                               n_max = 3,
+                                               col_names = F) %>% 
+  janitor::clean_names()
+
+invert_contacts_pacifico <- invert_contacts_pacifico %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() 
+
+invert_contacts_caribe <- readxl::read_excel(file.path(ps_exp_path, 
+                                                       "data",
+                                                       "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
+                                             sheet = "Point intercept",
+                                             n_max = 3,
+                                             col_names = F) %>% 
+  janitor::clean_names()
+
+invert_contacts_caribe <- invert_contacts_caribe %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  mutate(station_number = as.character(20 + as.numeric(station_number)))
+
+invert_contacts <- bind_rows(invert_contacts_pacifico,
+                             invert_contacts_caribe) %>% 
+  transmute(ps_station_id = paste0("COL_uvc_", station_number),
+            depth_m = as.numeric(depth_m), 
+            diver = "Kike Ballesteros",
+            sampling_method = "Inverts point contact") %>% 
+  distinct(ps_station_id, sampling_method, depth_m, diver) 
+```
+
+### invert quadrats
+
+```{r}
+invert_quadrats <- readxl::read_excel(file.path(ps_exp_path, 
+                                                "data", "primary","raw","inverts","COL_cuadrats_fieldsheet.xlsx"), 
+                                      sheet = "data",
+                                      n_max = 3,
+                                      col_names = F) %>% 
+  janitor::clean_names()
+
+invert_quadrats <- invert_quadrats %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  transmute(ps_station_id = paste0("COL_uvc_", station_number),
+            depth_m = as.numeric(depth_m), 
+            diver = "Paula Zapata",
+            sampling_method = "Inverts quadrats") %>% 
+  distinct(ps_station_id, sampling_method, depth_m, diver) 
+```
+
+### vagile inverts
+
+```{r}
+vagile_inverts_obs <- readxl::read_excel(file.path(ps_exp_path, 
+                                                   "data",
+                                                   "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
+                                         sheet = "vagile inverts",
+                                         n_max = 2,
+                                         col_names = F) %>% 
+  janitor::clean_names()
+
+vagile_inverts_obs <- vagile_inverts_obs %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  set_names("station_number", "depth_m") %>% 
+  mutate(station_number =  formatC(as.numeric(station_number) + 20, width = 2, flag = 0)) %>% 
+  transmute(ps_station_id = paste0("COL_uvc_", station_number),
+            depth_m = as.numeric(depth_m), 
+            diver = "Alfredo Abril-Howard",
+            sampling_method = "Vagile inverts obs") %>% 
+  distinct(ps_station_id, sampling_method, depth_m, diver) 
+```
+
+### corals
+
+```{r}
+corals_presence <- readxl::read_excel(file.path(ps_exp_path, 
+                                                "data",
+                                                "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
+                                      sheet = "Hard corals + Palythoa",
+                                      n_max = 2,
+                                      col_names = F) %>% 
+  janitor::clean_names()
+
+corals_presence <- corals_presence %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  set_names("station_number", "depth_m") %>% 
+  mutate(station_number =  formatC(as.numeric(station_number) + 20, width = 2, flag = 0)) %>% 
+  transmute(ps_station_id = paste0("COL_uvc_", station_number),
+            depth_m = as.numeric(depth_m), 
+            diver = "Alfredo Abril-Howard",
+            sampling_method = "Coral presence") %>% 
+  distinct(ps_station_id, sampling_method, depth_m, diver) 
+```
+
+```{r}
+uvc_methods_meta <- bind_rows(fish_transects, 
+                              corals_presence, 
+                              invert_contacts, 
+                              invert_quadrats, 
+                              vagile_inverts_obs) %>% 
+  arrange(ps_station_id)
+
+uvc_meta <- uvc_meta %>% 
+  left_join(uvc_methods_meta, by = "ps_station_id") %>% 
+  select(ps_station_id, method = sampling_method, date,location, sublocation, local_time = time, lat, lon, depth_m, habitat,viz_m, diver)
+
+write_csv(uvc_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "uvc_meta.csv"))
+```
+
+## YSI
+
+```{r}
+station_ids <- tibble(ps_station_id = list.files(file.path(ps_exp_path, 
+                                                           "data/primary/raw",
+                                                           "ysi/files"),
+                                                 full.names = F, 
+                                                 pattern = "COL_ysi") %>% 
+                        str_remove_all("\\.csv") ) %>% 
+  rowid_to_column(var = "station_number")
+
+og_names <- stringr::str_to_lower(c("DATE",	"TIME",	"SITE",	"DATA ID",	"GPS Latitude", "GPS Longitude",	"Barometer (mmHg)",	"pH",	"pH (mV)", "Chlorophyll (RFU)",	"Chlorophyll (µg/L)",	"PE (RFU)",	"PE (ug/L)",	"Cond (µS/cm)",	"Sp Cond (µS/cm)",	"Sal (psu)",	"nLFCond (µS/cm)",	"TDS (mg/L)",	"Temp (∞F)",	"Resistivity (ohms-cm)",	"Sigma-T (s t)", "Sigma (s)", "ODO (% Sat)",	"ODO (mg/L)",	"Pressure (psi a)", "Depth (m)", 	"Vertical Position (m)"))
+
+ysi_data <- list.files(file.path(ps_exp_path, 
+                                 "data/primary/raw",
+                                 "ysi/files"), 
+                       full.names = T, 
+                       pattern = "COL_ysi") %>% 
+  purrr::map_dfr(.f = read_csv, 
+                 skip = 6, 
+                 col_names = og_names, 
+                 .id = "station_number") %>%
+  janitor::clean_names() %>% 
+  select(station_number, date, time, gps_latitude, gps_longitude, barometer_mmhg, ph, 
+         chlorophyll_ug_l = chlorophyll_mg_l, cond_ms_cm, sal_psu, temp_f, odo_percent_sat, odo_mg_l, depth_m)
+
+ysi_data$station_number <- as.numeric(ysi_data$station_number)
+
+ysi_data$gps_latitude <- as.numeric(word(ysi_data$gps_latitude, 1))
+
+ysi_data$gps_longitude <- as.numeric(word(ysi_data$gps_longitude, 1))
+
+ysi_data <- ysi_data %>% 
+  left_join(station_ids) %>% 
+  select(ps_station_id, everything(), -station_number)
+```
+
+```{r}
+ysi_meta <- ysi_data %>% 
+  group_by(ps_station_id) %>% 
+  summarize(date = first(date),
+            time = first(time),
+            lat = last(gps_latitude[gps_latitude != 0]),
+            lon = last(gps_longitude[gps_longitude != 0]),
+            max_depth_m = max(depth_m))
+
+paired_lut <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw", "ysi/_COL_ysi_metadata.xlsx")) %>% 
+  distinct(ps_station_id,  lat, lon)
+
+ysi_meta <- ysi_meta %>% 
+  coalesce_join(paired_lut, by = "ps_station_id")
+
+ysi_meta <- ysi_meta %>% 
+  mutate(date = mdy(date),
+         method = "YSI probe",
+         operator = "Juan Mayorga",
+         location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla"),
+         time = hms::as_hms(time)) %>% 
+  select(ps_station_id, method, date, location, sublocation, time, lat, lon, max_depth_m, method, operator)
+
+write_csv(ysi_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "ysi_meta.csv"))
+```
+
+## Shallow bruvs
+
+```{r}
+bruvs_meta <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw/bruvs","_COL_bruvs_metadata.xlsx")) 
+
+bruvs_meta <- bruvs_meta %>% 
+  transmute(ps_station_id = paste0("COL_bruvs_", formatC(row_number(), width = 2, flag = 0)),
+            method = "Shallow bruvs",
+            date = dmy(date),
+            location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 TRUE ~ "Caribbean"),
+            sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                    date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                    date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                    date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                    date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                    date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                    TRUE ~ "Serranilla"),
+            local_time = hms::as_hms(drop_time),
+            lat = as.numeric(latitude),
+            lon = as.numeric(longitude),
+            depth = ifelse(str_detect(depth, "ft"), parse_number(depth)*0.3048, parse_number(depth)),
+            haul_time = hms::as_hms(haul_time),
+            habitat,
+            bait,
+            visibility,
+            operator = "Diego Cardeñosa")
+
+write_csv(bruvs_meta, file.path(ps_exp_path, 
+                                "data", "primary", "processed/metadata", "bruvs_meta.csv"))
+```
+
+## Shark tags
+
+```{r}
+tags_sets_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                              "data/primary/raw",
+                                              "tags","Drumline_Data.xlsx"), 
+                                    sheet = "Sets") %>% 
+  janitor::clean_names() 
+
+tags_sets_meta <- tags_sets_meta %>% 
+  group_by(date, hook_number, latitude, longitud) %>%
+  mutate(method = "Shark tagging",
+         operator = "Diego Cardeñosa",
+         date = ymd(date),
+         location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla"),
+         latitude = as.numeric(latitude),
+         longitud = as.numeric(longitud),
+         time_in = hms::as_hms(time_in),
+         time_out = hms::as_hms(time_out),
+         capture = str_to_sentence(capture),
+         ps_station_id = paste0("COL_tags_", 
+                                formatC(cur_group_id(), width = 2, flag = 0))) %>% 
+  ungroup() %>% 
+  select(ps_station_id, method, date, location, sublocation, set_check_number, time_in, time_out, lat = latitude, 
+         lon = longitud, bait_fish, bait_y_n, capture, comments, operator) %>% 
+  filter(!is.na(lat)) %>% 
+  arrange(ps_station_id)
+
+write_csv(tags_sets_meta,
+          file.path(ps_exp_path, "data", "primary", "processed/metadata", "tags_meta.csv"))
+```
+
+## Combine'em all
+
+```{r}
+exp_col_meta <- bind_rows(
+  tags_sets_meta %>% 
+    filter(set_check_number == "Set") %>% 
+    select(ps_station_id, method, date, location, sublocation, time = time_in, lat, lon,operator) %>% 
+    distinct(),
+  bruvs_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = local_time, lat, lon, operator),
+  ysi_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time, lat, lon,  depth_m = max_depth_m, operator),
+  uvc_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = local_time, lat, lon,  depth_m, operator = diver),
+  birds_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = time_start,
+             lat = lat_start, lon = long_start, operator = observer),
+  edna_meta %>% 
+    distinct(ps_station_id, method = sampling_method, date, location, sublocation, 
+             time = collection_time, lat, lon,  depth_m, operator),
+  meso_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = time_in, lat = lat_in, lon = lon_in,  depth_m, operator),
+  pcam_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = time_in, lat = lat_in, lon = lon_in, operator),
+  sub_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = dive_start, lat = surface_start_lat, lon = surface_start_lon, depth_m = max_depth, observer_1),
+  dscm_meta %>% 
+    distinct(ps_station_id, method, date, location, sublocation, time = time_in, lat = lat_in, lon = lon_in, operator))
+
+
+```
+
+```{r}
+cabo_stations <- c("COL_birds_48","COL_birds_49", "COL_birds_50", "COL_birds_58", "COL_birds_59",
+                   "COL_dscm_24", "COL_dscm_26",
+                   "COL_edna_077", "COL_edna_080","COL_edna_081", "COL_edna_082",
+                   "COL_meso_01", "COL_meso_02",
+                   "COL_pcam_23", "COL_pcam_25",
+                   "COL_sub_15", "COL_sub_16",
+                   "COL_uvc_03","COL_uvc_09", "COL_uvc_10", "COL_uvc_14", "COL_uvc_15", "COL_uvc_16",
+                   "COL_ysi_08","COL_ysi_13","COL_ysi_14","COL_ysi_18","COL_ysi_19","COL_ysi_20")
+
+utria_stations <- c("COL_birds_45", "COL_birds_46", "COL_birds_63", "COL_birds_64", "COL_birds_65", "COL_birds_66",
+                    "COL_birds_67", "COL_birds_68", "COL_birds_69",
+                    "COL_dscm_29", "COL_dscm_30","COL_dscm_31", "COL_dscm_32",
+                    "COL_edna_075", "COL_edna_076", "COL_edna_084", "COL_edna_085",
+                    "COL_pcam_27",
+                    "COL_sub_07", "COL_sub_18",
+                    "COL_uvc_06","COL_uvc_07", "COL_uvc_08", "COL_uvc_18", "COL_uvc_19", "COL_uvc_20",
+                    "COL_ysi_11","COL_ysi_12","COL_ysi_22","COL_ysi_23")
+
+exp_col_meta <- exp_col_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
+
+exp_col_meta %>% 
+  group_by(location, sublocation) %>% 
+  summarize(n_distinct(ps_station_id))
+```
+
+```{r}
+exp_col_meta %>% 
+  arrange(ps_station_id) %>% 
+  write_csv(file.path(ps_exp_path, "data", "primary", "processed/metadata", "exp_col_meta.csv"))
+
+exp_col_meta %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon","lat"), 
+               crs = 4326) %>% 
+  st_transform(crs = col_crs) %>% 
+  st_write(file.path(ps_exp_path, "data", "primary", "processed/metadata",  "exp_col_meta.gpkg"), append = F)
+```
+
+# Maps
+
+```{r}
+caribe_sat_img <- terra::rast(file.path(ps_exp_path, 
+                               "data", "secondary", "raw", 
+                               "Allen atlas", "Coral-Reefs-2020-Visual-V1-Mosaic", "satellite_imagery_0.tif")) 
+
+bajos_eez <- bajos_eez %>% 
+  st_transform(crs(caribe_sat_img)) %>% 
+  terra::vect() 
+  
+bn_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Bajo Nuevo Bank") %>% 
+                terra::ext(), mask = T) 
+
+serr_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Serranilla Bank") %>% 
+                terra::ext(), mask = T) 
+
+exp_col_meta <- read_csv(file.path(ps_exp_path, "data", "primary", "processed/metadata", "exp_col_meta.csv"))
+```
+
+
+## Serranilla
+
+```{r}
+serr_map <- exp_meta %>% 
+  filter(sublocation == "Serranilla") %>% 
+  mutate(method = str_remove_all(method, "probe"),
+         method = if_else(method %in% c("Fish visual census", 
+                                        "Coral presence", 
+                                        "Inverts point contact",
+                                        "Vagile inverts obs"), "UVC",method)) %>% 
+  distinct(method, lat, lon) %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^7)+
+  geom_sf(aes(shape = method, col = method), size = 1)+
+  coord_sf(xlim = c(-79.9, -79.7), ylim = c(15.72, 15.9))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",  name = "")+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "", shape = "")+
+  theme(legend.position = "bottom")
+
+ggsave(serr_map,
+       filename = file.path(ps_exp_path, "figures", "serranilla_meta.png"), 
+       dpi = 300)
+```
+
+## Bajo Nuevo
+
+```{r}
+bn_map <- exp_meta %>% 
+  filter(sublocation == "Bajo Nuevo") %>% 
+  mutate(method = str_remove_all(method, "probe"),
+         method = if_else(method %in% c("Fish visual census", 
+                                        "Coral presence", 
+                                        "Inverts point contact",
+                                        "Vagile inverts obs"), "UVC",method)) %>% 
+  distinct(method, lat, lon) %>% 
+  filter(!is.na(lon), lat > 15.7) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_jitter(.001) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^7)+
+  geom_sf(aes(shape = method, col = method), size = 1)+
+  coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",  name = "")+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "", shape = "")+
+  theme(legend.position = "bottom")
+
+ggsave(bn_map,
+       filename = file.path(ps_exp_path, "figures", "bajo_nuevo_meta.png"), 
+       dpi = 300, height = 5, width = 6.5)
+```
+
+## Golfo de Tribuga
+
+
+
+
