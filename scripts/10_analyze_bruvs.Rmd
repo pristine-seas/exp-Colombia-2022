@@ -1,0 +1,172 @@
+---
+title: "Process Shallow bruvs"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(flextable)
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+
+library(tidyverse)
+source("_prj_vars.R")
+
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+bruvs_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "bruvs_meta.csv")) %>% 
+  filter(location == "Caribbean")
+
+bruvs_taxa <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
+  filter(method == "bruvs", location == "Caribbean")
+
+bruvs_maxN <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw/bruvs","COL_bruvs_MaxN.xlsx")) 
+
+bruvs_maxN <- bruvs_maxN %>% 
+  mutate(ps_station_id = paste0("COL_bruvs_", 
+                                formatC(row_number(), width = 2, flag = 0))) %>% 
+  dplyr::select(-c(1,2,3)) %>% 
+  pivot_longer(!ps_station_id, names_to = "taxon", values_to = "max_n") %>% 
+  mutate(taxon = case_when(taxon == "C. acronotus" ~ "Carcharhinus acronotus",
+                           taxon == "C. perezi" ~ "Carcharhinus perezi",
+                           taxon == "G. cirratum" ~ "Ginglymostoma cirratum",
+                           taxon == "G. cuvier" ~ "Galeocerdo cuvier",
+                           taxon == "Rhizoprionodon sp." ~ "Rhizoprionodon",
+                           taxon == "S. mokarran" ~ "Sphyrna mokarran",
+                           taxon == "N. brevirostris" ~ "Negaprion brevirostris",
+                           taxon == "H. americanus" ~ "Homarus americanus",
+                           taxon == "A. narinari" ~ "Aetobatus narinari",
+                           taxon == "U. jamaicensis" ~ "Urobatis jamaicensis",
+                           taxon == "P. percellens" ~ "Pseudobatos percellens",
+                           taxon == "Barracudas" ~ "Sphyraena barracuda",
+                           taxon == "Mackerels" ~ "Scombridae",
+                           taxon == "Hogfish" ~ "Bodianus",
+                           taxon == "Turtles" ~ "Cheloniidae",
+                           taxon == "Dolphins" ~ "Delphinidae",
+                           taxon == "Snappers-yellowtails" ~ "Lutjanidae",
+                           taxon == "Jacks" ~ "Carangidae",
+                           taxon %in% c("Small Groupers", "Large Groupers") ~ "Serranidae",
+                           TRUE ~ NA_character_)) %>% 
+  filter(!is.na(taxon))
+```
+
+
+```{r}
+bruvs_summary_by_station <- bruvs_maxN %>% 
+  group_by(ps_station_id) %>% 
+  summarize(n_taxa = n_distinct(taxon[max_n > 0]),
+            abundance = sum(max_n)) %>% 
+  left_join(bruvs_meta %>% 
+              dplyr::select(ps_station_id, depth, lat, lon))
+
+bruvs_summary_by_taxa <- bruvs_maxN %>% 
+  group_by(taxon) %>% 
+  summarize(abundance = sum(max_n),
+            avg_maxN = round(mean(max_n),1),
+            max_maxN  = max(max_n),
+            f_obs = round(100*n_distinct(ps_station_id[max_n >0])/n_distinct(bruvs_meta$ps_station_id),1)) %>%
+  filter(max_maxN > 0) %>% 
+  left_join(bruvs_taxa %>% 
+              dplyr::select(taxon, family)) %>% 
+  dplyr::select(family, taxon, everything()) %>% 
+  arrange(family, taxon)
+
+bruvs_summary_by_taxa$family[bruvs_summary_by_taxa$taxon == "Sphyraena barracuda"] <- "Sphyraenidae"
+
+round(sd(bruvs_summary_by_station$n_taxa),1)
+round(mean(bruvs_summary_by_station$abundance))
+```
+
+A total of `r n_distinct(bruvs_meta$ps_station_id)` shallow water BRUVs were deployed inside the lagoon of the southern end of Bajo Nuevo. Jacks (*Carangidae* sp) were the most frequent fish species observed as well as the most abundant, followed by serranids and barracuda. A total of six species of sharks were observed with Caribbean reef shark and Nurse shark observed in half of the deployments. Notably, one individual of lemon shark (*Negaprion brevirostris*) was recorded at a depth of 25 meters. On average, each deployment recorded `r round(mean(bruvs_summary_by_station$n_taxa),0)` distinct taxa (sd = `r round(sd(bruvs_summary_by_station$n_taxa),1)`) and `r round(mean(bruvs_summary_by_station$abundance))` individuals (sd = `r round(sd(bruvs_summary_by_station$abundance), 1)`). These results highlight the diversity of shark species in the region and complement previous work done in Serranilla that suggests these atolls may hold one of the healthiest shark populations of the Caribbean Sea. 
+
+```{r include = T, echo = F}
+bruvs_summary_by_taxa %>% 
+  flextable() %>% 
+  set_header_labels(values = list(family = "Family", 
+                                  taxon = "Taxon", 
+                                  abundance = "Abundance",
+                                  avg_maxN = "Mean max N",
+                                  max_maxN = "Max max N",
+                                  f_obs = "% Occurrence")) %>%
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+
+# Map 
+
+```{r}
+caribe_sat_img <- terra::rast(file.path(ps_exp_path, 
+                               "data", "secondary", "raw", 
+                               "Allen atlas", "Coral-Reefs-2020-Visual-V1-Mosaic", "satellite_imagery_0.tif")) 
+
+bajos_eez <- bajos_eez %>% 
+  st_transform(crs(caribe_sat_img)) 
+  
+bn_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Bajo Nuevo Bank") %>% 
+                terra::ext(), mask = T) 
+
+bn_map <- bruvs_summary_by_station %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^7)+
+  geom_sf(aes(size = abundance, col = n_taxa))+
+  coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)+
+  viridis::scale_color_viridis()+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  theme(legend.position = "right",
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(bn_map,
+       filename = file.path(ps_exp_path, "figures", "bruvs_bajo_nuevo_map.png"), 
+       height = 4, width = 6,
+       dpi = 300)
+```
+
+```{r include = T, echo = F}
+bruvs_meta %>% 
+  mutate(depth = round(depth)) %>% 
+  dplyr::select(date, location = sublocation, lat, lon, depth_m = depth, time_in = local_time, 
+         time_out = haul_time) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+

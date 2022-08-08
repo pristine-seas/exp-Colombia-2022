@@ -1,13 +1,13 @@
 ---
 title: "Reef fish communities"
 output:
+  word_document:
+    toc: yes
+    toc_depth: '1'
   html_document:
     toc: yes
     toc_depth: '1'
     df_print: paged
-  word_document:
-    toc: yes
-    toc_depth: '1'
 ---
 
 ```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
@@ -19,6 +19,7 @@ knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
 
 options(dplyr.summarise.inform = FALSE)
 
+library(sf)
 library(tidyverse)
 library(vegan)
 
@@ -27,12 +28,10 @@ source("_prj_vars.R")
 load(file = file.path(ps_exp_path, 
                       "data", "secondary", "processed", "admin_spatial_layers.RData"))
 
-
-```
-
-```{r}
 uvc_meta <- read_csv(file.path(ps_exp_path, 
-                               "data", "primary", "processed", "metadata", "uvc_meta.csv"))
+                               "data", "primary", "processed", "metadata", "uvc_meta.csv")) %>% 
+  filter(method == "Fish visual census", location == "Caribbean") %>% 
+  mutate(habitat = str_extract(habitat, "[^,]+"))
 
 uvc_taxa <- read_csv(file.path(ps_exp_path, 
                                "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
@@ -40,8 +39,35 @@ uvc_taxa <- read_csv(file.path(ps_exp_path,
 
 caribe_fish_data <- readxl::read_xlsx(file.path(ps_exp_path, 
                                "data", "primary","raw", "fish", "SEA_fish_final.xlsx"))
+
 ```
 
+```{r}
+uvc_meta %>% 
+  group_by(sublocation, habitat) %>% 
+  summarize(n_distinct(ps_station_id))
+```
+
+```{r}
+caribe_sat_img <- terra::rast(file.path(ps_exp_path, 
+                               "data", "secondary", "raw", 
+                               "Allen atlas", "Coral-Reefs-2020-Visual-V1-Mosaic", "satellite_imagery_0.tif")) 
+
+bajos_eez <- bajos_eez %>% 
+  st_transform(terra::crs(caribe_sat_img)) 
+  
+bn_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Bajo Nuevo Bank") %>% 
+                terra::ext(), mask = T) 
+
+serr_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Serranilla Bank") %>% 
+                terra::ext(), mask = T) 
+```
+
+# Clean data 
 
 ```{r}
 caribe_fish_data <- caribe_fish_data %>%
@@ -60,11 +86,10 @@ caribe_fish_data <- caribe_fish_data %>%
   left_join(uvc_taxa %>% 
               filter(location == "Caribbean") %>% 
               distinct(ps_taxon_code, taxon_sci_name, family, order, class,
-                       is_vme, iucn_redlist_cat, max_length_tl, troph, a, b)) %>% 
-  mutate(habitat = str_extract(habitat, "[^,]+"))
-```
+                       is_vme, iucn_redlist_cat, max_length_tl, troph, a, b)) 
 
-```{r QA/QC}
+## QA/QC
+
 caribe_fish_data %>%
   filter(avg_length > max_length_tl) %>%
   transmute(abs(avg_length - max_length_tl))
@@ -75,6 +100,8 @@ caribe_fish_data <- caribe_fish_data %>%
                               avg_length))
 ```
 
+## By transect 
+
 ```{r}
 fish_data_by_transect <- caribe_fish_data %>% 
   mutate(transect_id = paste(ps_station_id, transect, diver, depth_strata, sep = "_"),
@@ -84,18 +111,269 @@ fish_data_by_transect <- caribe_fish_data %>%
   group_by(sublocation, ps_station_id, transect_id, transect, diver, depth_strata, depth_m, habitat,
            ps_taxon_code, taxon_sci_name, order, family, iucn_redlist_cat, troph) %>% 
   summarise(across(c(n_ind, ind_m2, biomass_gr, gr_m2), sum)) %>% 
-  ungroup() %>% 
-  mutate(across(where(is.numeric), round, 3))
+  ungroup() 
 
-write_csv(fish_data_by_transect,
-          file.path(ps_exp_path,"data/primary/processed/analyses/uvc_caribe_fish_data_by_transect.csv"))
+# Need to add zeros
+
+fish_data_by_transect <- fish_data_by_transect %>% 
+  distinct(sublocation, ps_station_id, transect_id, diver, depth_strata, depth_m, habitat) %>% 
+  full_join(expand.grid(transect_id = unique(fish_data_by_transect$transect_id),
+                        ps_taxon_code = unique(fish_data_by_transect$ps_taxon_code))) %>% 
+  left_join(fish_data_by_transect %>% 
+              distinct(transect_id, ps_taxon_code, n_ind, ind_m2, gr_m2)) %>% 
+  left_join(fish_data_by_transect %>% 
+              distinct(ps_taxon_code, taxon_sci_name, order, family, iucn_redlist_cat)) %>% 
+  replace_na(list(n_ind = 0, ind_m2 = 0, gr_m2 = 0))
 ```
 
-# Taxa composition
+```{r}
+transect_summary <- fish_data_by_transect %>% 
+  group_by(sublocation, ps_station_id, transect_id, habitat, depth_strata, depth_m, diver) %>% 
+  summarize(n_taxa = n_distinct(ps_taxon_code[n_ind > 0]),
+            n_ind = sum(n_ind),
+            ind_m2 = sum(ind_m2),
+            gr_m2 = sum(gr_m2)) %>% 
+  ungroup() 
 
-We conducted a total of `r n_distinct(caribe_fish_data$ps_station_id)` underwater visuals census to characterize the communities of reef fishes in Bajo Nuevo (n = `r n_distinct(caribe_fish_data$ps_station_id[caribe_fish_data$sublocation == "Bajo Nuevo"])`) and Serranilla (n = `r n_distinct(caribe_fish_data$ps_station_id[caribe_fish_data$sublocation == "Serranilla"])`). In total, we registered `r n_distinct(caribe_fish_data$taxon_sci_name)` distinct taxa, belonging to `r n_distinct(caribe_fish_data$family)` families. 
+n_ind_data_wide <- fish_data_by_transect %>% 
+  select(transect_id, ps_taxon_code, n_ind) %>% 
+  pivot_wider(names_from = ps_taxon_code, values_from = n_ind, values_fill = 0) %>% 
+  column_to_rownames("transect_id") 
 
-```{r include = T}
+diversity_by_transect <- diversity(n_ind_data_wide) %>% 
+  enframe() %>% 
+  set_names(c("transect_id", "H")) %>% 
+  mutate(richness = specnumber(n_ind_data_wide),
+         evenness = H/log(richness))
+
+transect_summary <- transect_summary %>% 
+  left_join(diversity_by_transect) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  ungroup() 
+```
+
+## By station
+
+```{r}
+fish_data_by_station <- fish_data_by_transect %>% 
+  group_by(sublocation, habitat, ps_station_id, family, taxon_sci_name) %>% 
+  summarize(n_ind = mean(n_ind, na.rm = T),
+            ind_m2 = mean(ind_m2, na.rm = T),
+            gr_m2 = mean(gr_m2, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(ps_station_id) %>% 
+  mutate(f_n_ind = n_ind/sum(n_ind),
+         f_ind_m2 = ind_m2/sum(ind_m2),
+         f_gr_m2 = gr_m2/sum(gr_m2)) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  select(sublocation, habitat, ps_station_id, family, taxon_sci_name, 
+         n_ind, f_n_ind, ind_m2, f_ind_m2, gr_m2, f_gr_m2)
+
+station_summary <- transect_summary %>% 
+  group_by(sublocation, habitat, ps_station_id) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2, H, evenness), mean)) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  ungroup() 
+```
+
+```{r, eval = F}
+serr_map <- station_summary %>% 
+  left_join(uvc_meta %>% 
+              distinct(ps_station_id, lat, lon)) %>% 
+  filter(sublocation == "Serranilla") %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^8)+
+  geom_sf(aes(col = habitat, size = gr_m2))+
+  coord_sf(xlim = c(-79.86, -79.82), ylim = c(15.785, 15.825))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
+  scale_shape_manual(values= seq(100:110))+
+  theme_light()+
+  labs(col = "Habitat", size = bquote('Biomass density '(gr/m^2)))+
+  theme(legend.background = element_blank(),
+        legend.position = "bottom",
+        legend.box = 'vertical',
+        legend.justification = 'left',
+        legend.box.just = 'left',
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(serr_map,
+       filename = file.path(ps_exp_path, "figures", "serranilla_fish_biomass_map.png"), 
+       dpi = 300)
+```
+
+```{r, eval = F}
+bn_map <- station_summary %>% 
+  left_join(uvc_meta %>% 
+              distinct(ps_station_id, lat, lon)) %>% 
+  filter(sublocation == "Bajo Nuevo") %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^8)+
+  geom_sf(aes(col = habitat, size = gr_m2))+
+  coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
+  scale_shape_manual(values= seq(100:110))+
+  theme_light()+
+  labs(col = "Habitat", size = bquote('Biomass density '(gr/m^2)))+
+  theme(legend.background = element_blank(),
+        legend.position = "bottom",
+        legend.box = 'vertical',
+        legend.justification = 'left',
+        legend.box.just = 'left',
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(bn_map,
+       filename = file.path(ps_exp_path, "figures", "bajo_nuevo_fish_biomass_map.png"), 
+       dpi = 300, height = 5, width = 6.5)
+```
+
+```{r}
+(location_summary <- station_summary %>% 
+   group_by(sublocation) %>% 
+   summarize(across(c(richness = n_taxa, n_ind, ind_m2, gr_m2, H), mean)) %>% 
+   mutate_if(is.numeric, round, 2) %>% 
+   left_join(fish_data_by_transect %>% 
+               group_by(sublocation) %>% 
+               summarize(n_stations = n_distinct(ps_station_id),
+                         n_transects = n_distinct(transect_id),
+                         n_families = n_distinct(family[n_ind > 0]),
+                         n_taxa = n_distinct(ps_taxon_code[n_ind > 0]))) %>% 
+   select(sublocation, n_stations, n_transects, n_taxa, n_families, everything()) %>% 
+   ungroup())
+
+(habitat_summary <- station_summary %>% 
+    group_by(sublocation, habitat) %>% 
+    summarize(across(c(richness = n_taxa, n_ind, ind_m2, gr_m2, H), mean)) %>% 
+    mutate_if(is.numeric, round, 2) %>% 
+    left_join(fish_data_by_transect %>% 
+                group_by(sublocation, habitat) %>% 
+                summarize(n_stations = n_distinct(ps_station_id),
+                          n_transects = n_distinct(transect_id),
+                          n_families = n_distinct(family[n_ind > 0]),
+                          n_taxa = n_distinct(ps_taxon_code[n_ind > 0]))) %>% 
+    select(sublocation, n_stations, n_transects, n_taxa, n_families, everything()) %>% 
+    ungroup() %>% 
+    arrange(desc(richness)))
+```
+
+```{r}
+fish_data_by_transect %>% 
+  group_by(order, family) %>% 
+  summarise(n_taxa = n_distinct(ps_taxon_code[n_ind > 0])) %>% 
+  ungroup() %>% 
+  arrange(desc(n_taxa))
+```
+
+Overall, we registered `r location_summary$n_taxa[location_summary$sublocation == "Bajo Nuevo"]` and `r location_summary$n_taxa[location_summary$sublocation == "Serranilla"]` distinct taxa from `r location_summary$n_families[location_summary$sublocation == "Bajo Nuevo"]` and `r location_summary$n_families[location_summary$sublocation == "Serranilla"]` families in Bajo Nuevo and Serranilla, respectively.  Families with the most number of taxa were Serranidae (n = 13), Scaridae (n = 11), Pomacentridae (n = 11), and Labridae (n = 10). On average, species richness was slightly higher in Bajo Nuevo (21 taxa per transect) than in Serranilla (18 taxa per transect). This can be partially attributed to the seagrass habitat in Serranilla which had a significantly lower number of species (1.67 species) relative to all other sites (R2 = 0.20; p = 0.001). Differences in species richness between the other habitats were not statistically significant but lagoon patch reefs in Bajo Nuevo had the highest richness (22.80 species), followed by fringing reefs in Serranilla (21.67 species). On average, species richness was higher in shallower transect (20.7 species) than in deeper ones (19.6 species) and even though differences were statistically significant (F = 4.6171; p = 0.001), depth explains little of the variance across transects (R2 = 0.02045). 
+
+```{r, include = T, echo = F}
+habitat_summary %>% 
+  select(sublocation, habitat, n_stations, n_transects, n_taxa, richness, ind_m2, gr_m2) %>% 
+  arrange(sublocation, desc(n_stations)) %>% 
+  flextable::flextable() %>% 
+  flextable::set_header_labels(values = list(sublocation = "Location", 
+                                             habitat = "Habitat", 
+                                             n_stations = "# stations",
+                                             n_transects = "# transects",
+                                             n_taxa = "# taxa",
+                                             richness = "Species richness",
+                                             ind_m2 = "Abundance",
+                                             gr_m2 = "Biomass density")) %>% 
+  flextable::merge_v(j = "sublocation") %>% 
+  flextable::autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+```{r}
+transect_summary %>% 
+  group_by(depth_strata) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2, H), mean)) 
+```
+
+```{r}
+transect_summary %>% 
+  select(ind_m2, gr_m2, H, evenness, n_taxa) %>% 
+  rstatix::shapiro_test(ind_m2, gr_m2, H, evenness, n_taxa)
+
+adonis2(transect_summary %>% 
+          select(n_taxa) ~  habitat + depth_strata + diver + sublocation, 
+        data = transect_summary,
+        strata = transect_summary$ps_station_id,
+        by = "margin",
+        method = "euclidean")
+```
+
+```{r}
+var_labs <- c("A", "B", "C")
+
+names(var_labs) <- c("richness", "gr_m2", "ind_m2")
+
+univariate_plots_by_habitat <- transect_summary %>% 
+  pivot_longer(c(richness, ind_m2, gr_m2), names_to = "variable") %>% 
+  mutate(variable = factor(variable,      # Reordering group factor levels
+                           levels = c("richness", "ind_m2", "gr_m2"))) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y = value, fill = habitat))+
+  facet_wrap("variable", scales = "free", nrow = 3, 
+             labeller = labeller(variable = var_labs))+
+  bbplot::bbc_style()+
+  paletteer::scale_fill_paletteer_d("ggsci::default_jama")+
+  theme(legend.position = "bottom", plot.title.position = "plot") +
+  labs(fill = "", x = "", title = "")
+  
+ggsave(univariate_plots_by_habitat, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_univariate_boxplots_by_habitat.png"), 
+       dpi = 300, width = 11, height = 10)
+
+univariate_plots_by_depth <- transect_summary %>% 
+  pivot_longer(c(richness, ind_m2, gr_m2), names_to = "variable") %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y = value, fill = depth_strata))+
+  facet_wrap("variable", scales = "free", nrow = 3, 
+             labeller = labeller(variable = var_labs))+
+  bbplot::bbc_style()+
+  paletteer::scale_fill_paletteer_d("ggsci::default_jama")+
+  theme(legend.position = "bottom", plot.title.position = "plot") +
+  labs(fill = "", x = "", title = "Univariate statistics by habitat")
+  
+ggsave(univariate_plots_by_depth, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_univariate_boxplots_by_depth.png"), 
+       dpi = 300, width = 11, height = 10)
+```
+
+```{r }
 (caribe_fish_diversity_treemap <- caribe_fish_data %>% 
   group_by(sublocation, order, family) %>% 
   summarise(weight = n_distinct(ps_taxon_code))%>% 
@@ -119,45 +397,139 @@ ggsave(caribe_fish_diversity_treemap,
 ```
 
 ```{r}
-caribe_fish_data %>% 
-  group_by(sublocation) %>% 
-  summarise(n_stations = n_distinct(ps_station_id),
-            n_families = n_distinct(family),
-            n_species = n_distinct(ps_taxon_code),
-            n_ind = sum(n_ind))
+summary_by_taxa <- fish_data_by_station %>% 
+  group_by(sublocation, family, taxon_sci_name) %>% 
+  summarize(across(c(n_ind, f_n_ind, ind_m2, f_ind_m2, gr_m2, f_gr_m2), mean)) %>% 
+  left_join(fish_data_by_station %>% 
+              group_by(sublocation, family, taxon_sci_name) %>% 
+              summarize(f_obs = 100*n_distinct(ps_station_id[n_ind > 0])/n_distinct(ps_station_id))) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  mutate(f_obs = round(f_obs, 1)) %>% 
+  arrange(desc(gr_m2)) 
 ```
-```{r}
-caribe_fish_abundance_treemap <- fish_data_by_transect %>% 
-  group_by(sublocation, ps_station_id, ps_taxon_code, order, family) %>% 
-  summarise(across(c(ind_m2, gr_m2), mean)) %>%
-  ungroup() %>% 
-  group_by(sublocation, order, family) %>% 
-  summarise(across(c(ind_m2, gr_m2), sum)) %>% 
-  ungroup() %>% 
-  mutate(f_ind_m2 = round(100*ind_m2/sum(ind_m2),1),
-         f_gr_m2 = round(100*gr_m2/sum(gr_m2), 1)) %>% 
-  ggplot(aes(area = ind_m2, 
-             label = paste(family, paste0(f_ind_m2, "%"), sep = "\n"),
-             fill = order,
-             subgroup = order)) +
-  treemapify::geom_treemap(show.legend = T)+
-  treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
-  labs(fill = "",
-       title = "Taxa abundance (ind m2) in underwater fish surveys")+
-  facet_wrap("sublocation", nrow = 2) +
-  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
-  #bbplot::bbc_style()+
-  theme(legend.position = "bottom")
-  #guides(fill = guide_legend(nrow=5,byrow=TRUE))+
-  # theme(legend.position = "rigth")
 
-ggsave(caribe_fish_abundance_treemap, 
-       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_abundance_treemap.png"),
-       dpi = 300, width = 8, height = 10)
+Fish abundance was dominated by small reef fish at both sites. In Serranilla, (*Thalassoma bifasciatum*) and (*Halichoeres bivittatus*) accounted for 25% and 7% of all fish observations. In Bajo Nuevo (*Stegastes partitus*) and (*T. bifasciatum*) were observed in all surveys and accounted for 11% and 10% of observations, on average. Most reef fish species were observed at both atolls but several others were exclusively seen on transect on only one. For instance, nurse sharks (*G. cirratum*) and (*Chaetodon capistratus*) were seen in two thirds of transects in Bajo Nuevo but were absent in Serranilla. Similarly, seven species of hamlets (*Hypoplectrus sp*) were frequently observed in Bajo Nuevo but were never seen in Serranilla. Conversely, (*Halichoeres poeyi*) and (*Haemulon parra*) and (*Pomacanthus arcuatus*) were observed in 27%, 18%, and 18% of transects in Serranilla but were absent in Bajo Nuevo. Similarly to species richness, fish abundance was significantly lower in seagrass beds that in other habitats. Including only the common habitats between atolls, average fish abundance was higher in Serranilla (2.12 ind/m2) than Bajo Nuevo (2.02 ind/m2) but differences are not statistically significant. Fish abundance was lower is deeper transects than in shallower ones and while differences are statistically significant (p = 0.017), depth explains a modest amount of the variability (R2 = 0.065)
+
+```{r}
+exclusive_sp <- summary_by_taxa %>% 
+  select(sublocation, family, taxon_sci_name, f_obs) %>% 
+  pivot_wider(names_from = c(sublocation), values_from = f_obs) %>% 
+  filter(Serranilla == 0 | `Bajo Nuevo` == 0) %>% 
+  arrange(Serranilla)
+
+transect_summary %>% 
+  filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+  group_by(sublocation) %>% 
+  summarize(across(c(richness = n_taxa, n_ind, ind_m2, gr_m2, H), mean)) 
+
+adonis2(transect_summary %>% 
+          filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          select(ind_m2) ~  habitat + depth_strata + diver + sublocation, 
+        data = transect_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")) ,
+        strata = transect_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          pull(ps_station_id),
+        by = "margin",
+        method = "euclidean")
+```
+
+```{r}
+adonis2(station_summary %>% 
+          filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          select(ind_m2) ~  habitat + sublocation, 
+        data = station_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")),
+        by = "margin",
+        method = "euclidean")
+
+pairwiseAdonis::pairwise.adonis2(station_summary %>% 
+                                   filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+                                   select(ind_m2) ~  habitat + sublocation, 
+                                 data = station_summary %>% 
+                                   filter(!habitat %in% c("deep platform", "seagrass beds")),
+                                 by = "margin",
+                                 method = "euclidean")
+```
+
+In Serranilla, the highest average biomass density (gr/m2) was attributed to (*Haemulon carbonarium*), (*Melichthys niger*), and (*Balistes vetula*) with values of 11.1, 8.16, and 5.32 gr/m2, respectively. These species were also very common and were observed in 82%, 91%, and 91% of all transects. In Bajo Nuevo, biomass density was dominated by nurse sharks (*Ginglymostoma cirratum*) with an average of 37.2 gr/m2. Nurse sharks were observed in two thirds of all stations and on average accounted for 28.9% of biomass in a transect. After nurse sharks, (*M. niger*) and (*Sphyraena barracuda*) contributed most in terms of biomass with average densities of 10.7 and 3.7 gr/m2, respectively. Overall, average fish biomass was slightly higher in Bajo Nuevo (91.73 gr/m2) than in Serranilla (81.78 gr/m2). However, if we omit nurse sharks from the analysis and limit the comparison to shared habitats, fish biomass density is considerably higher in Serranilla (89.43) than in Bajo Nuevo (50.72), although not statistically significant. Importantly, the biomass density of predatory fish and commercially important species (i.e., *Lutjanus* sp., *"Mycteroperca* sp., *Caranx* sp., *Seriola* sp.,) was very low at both Serranilla (2.12 gr/m2) and Bajo Nuevo (0.62 gr/m2). 
+
+```{r}
+fish_data_by_transect %>% 
+  filter(family != "Ginglymostomatidae" & taxon_sci_name != "Decapterus macarellus") %>% 
+    filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+  group_by(sublocation, ps_station_id, transect_id, habitat, depth_strata, depth_m, diver) %>% 
+  summarize(n_taxa = n_distinct(ps_taxon_code[n_ind > 0]),
+            n_ind = sum(n_ind),
+            ind_m2 = sum(ind_m2),
+            gr_m2 = sum(gr_m2)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, habitat, ps_station_id) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean)) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  ungroup() %>% 
+  group_by(sublocation) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean)) 
+```
+
+```{r}
+adonis2(transect_summary %>% 
+          filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          select(gr_m2) ~  habitat + depth_strata + diver + sublocation, 
+        data = transect_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")) ,
+        strata = transect_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          pull(ps_station_id),
+        by = "margin",
+        method = "euclidean")
+
+adonis2(station_summary %>% 
+          filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+          select(gr_m2) ~  habitat + sublocation, 
+        data = station_summary %>% 
+            filter(!habitat %in% c("deep platform", "seagrass beds")),
+        by = "margin",
+        method = "euclidean")
+
+adonis2(transect_summary %>% 
+          filter(!habitat %in% c("seagrass beds", "deep platform")) %>% 
+          select(gr_m2, ind_m2, n_taxa) ~ sublocation + habitat + depth_m + diver, 
+        data = transect_summary %>% 
+          filter(!habitat %in% c("seagrass beds", "deep platform")),
+        strata = transect_summary$ps_station_id[!transect_summary$habitat %in% 
+                                                  c("seagrass beds", "deep platform")],
+        by = "margin")
+```
+
+```{r, include = T, echo = F}
+summary_by_taxa %>% 
+  select(sublocation, family, taxon_sci_name, n_ind, gr_m2, f_obs) %>% 
+  group_by(sublocation) %>% 
+  slice_max(gr_m2, n = 10) %>% 
+  ungroup() %>% 
+  pivot_longer(-c(sublocation, taxon_sci_name, family)) %>% 
+  pivot_wider(names_from = c(sublocation, name), values_from = value) %>% 
+  arrange(family, taxon_sci_name) %>% 
+  flextable::flextable() %>% 
+  flextable::set_header_labels(values = list(family = "Family", 
+                                             taxon_sci_name = "Taxa", 
+                                             `Bajo Nuevo_n_ind` = "Abundance",
+                                             `Bajo Nuevo_gr_m2` = "Biomass density",
+                                             `Bajo Nuevo_f_obs` = "% Ocurrence",
+                                             `Serranilla_n_ind` = "Abundance",
+                                             `Serranilla_gr_m2` = "Biomass density",
+                                             `Serranilla_f_obs` = "% Ocurrence")) %>% 
+  flextable::add_header_row(values = c("", "", "Bajo Nuevo", "Serranilla"), 
+                            colwidths = c(1,1,3,3)) %>% 
+  flextable::merge_v(j = "family") %>% 
+  flextable::autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
 ```
 
 ```{r}
 caribe_fish_biomass_treemap <- fish_data_by_transect %>% 
+  #filter(family != "Ginglymostomatidae") %>% 
   group_by(sublocation, ps_station_id, ps_taxon_code, order, family) %>% 
   summarise(across(c(ind_m2, gr_m2), mean)) %>%
   ungroup() %>% 
@@ -174,140 +546,144 @@ caribe_fish_biomass_treemap <- fish_data_by_transect %>%
   treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
   labs(fill = "",
        title = "Taxa biomass (gr m2) in underwater fish surveys")+
-  facet_wrap("sublocation", nrow = 2) +
+  facet_wrap("sublocation", nrow = 1) +
   scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
-  #bbplot::bbc_style()+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))+
   theme(legend.position = "bottom")
-  #guides(fill = guide_legend(nrow=5,byrow=TRUE))+
-  # theme(legend.position = "rigth")
 
 ggsave(caribe_fish_biomass_treemap, 
        filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_biomass_treemap.png"),
-       dpi = 300, width = 8, height = 10)
+       dpi = 300, width = 12, height = 10)
 ```
 
-# Visualize data
-
 ```{r}
-n_ind_data_wide <- fish_data_by_transect %>% 
-  select(transect_id, ps_taxon_code, n_ind) %>% 
-  pivot_wider(names_from = ps_taxon_code, values_from = n_ind, values_fill = 0) %>% 
-  column_to_rownames("transect_id") 
-
-diversity_by_transect <- diversity(n_ind_data_wide) %>% 
-  enframe() %>% 
-  set_names(c("transect_id", "H")) %>% 
-  mutate(richness = specnumber(n_ind_data_wide),
-         evenness = H/log(richness))
-
-transect_summary <- fish_data_by_transect %>% 
-  group_by(ps_station_id, transect_id, habitat, depth_strata, depth_m, diver, sublocation) %>% 
-  summarize(n_ind = sum(n_ind),
+fish_data_by_transect %>% 
+  filter(str_detect(taxon_sci_name, c("Caranx", "Mycteroperca", "Seriola", "Lutjanus"))) %>% 
+  group_by(sublocation, ps_station_id, transect_id, habitat, depth_strata, depth_m, diver) %>% 
+  summarize(n_taxa = n_distinct(ps_taxon_code[n_ind > 0]),
+            n_ind = sum(n_ind),
             ind_m2 = sum(ind_m2),
             gr_m2 = sum(gr_m2)) %>% 
   ungroup() %>% 
-  left_join(diversity_by_transect)
+  group_by(sublocation, habitat, ps_station_id) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean)) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  ungroup() %>% 
+  group_by(sublocation) %>% 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean)) 
+```
 
-transect_summary %>% 
-  pivot_longer(c(n_ind, ind_m2, gr_m2, H, richness, evenness)) %>% 
-  ggplot()+
-  geom_histogram(aes(value))+
-  facet_wrap("name", scales = "free")
+## Community composition
+
+Fish assemblages were significantly different between atolls (R2 = 0.16; F = 4.75; p= 0.001). Stations in Serranilla show a higher concordance in the ordination space relative to Bajo Nuevo which is expected given the smaller sampling footprint in the latter atoll. Species that strongly determine the ordination of stations include the nurse sharks (*G. cirratum*) and hamlet (*H. nigricans*) which were abundant in Bajo Nuevo but absent in Serranilla, and (*Balistes vetula*) whose biomass density was twice as high in Serranilla compared to Bajo Nuevo. 
+
+```{r}
+gr_m2_data_wide <- fish_data_by_station %>% 
+  filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+  select(ps_station_id, taxon_sci_name, gr_m2) %>% 
+  pivot_wider(names_from = taxon_sci_name, values_from = gr_m2, values_fill = 0) %>% 
+  column_to_rownames("ps_station_id") 
+
+gr_m2_dist <- vegan::vegdist(as.matrix(gr_m2_data_wide), 
+                      method = "bray") 
+
+gr_m2_pcoa_c <- dbrda(gr_m2_dist ~ habitat + sublocation, 
+                      data = station_summary %>% 
+                        filter(!habitat %in% c("deep platform", "seagrass beds")),
+                      dist = "bray", 
+                      add = "lingoes")
+
+gr_m2_pcoa_c_env_fit <- envfit(gr_m2_pcoa_c, 
+                               station_summary %>% 
+                                 filter(!habitat %in% c("deep platform", "seagrass beds")) %>% 
+                                 select(habitat,  sublocation))
+
+gr_m2_pcoa_c_spp_fit <- envfit(gr_m2_pcoa_c, 
+                               gr_m2_data_wide)
+
+gr_m2_pcoa_c_spp_scores <- gr_m2_pcoa_c_spp_fit %>% 
+  scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = gr_m2_pcoa_c_spp_fit$vectors$r,
+         p = gr_m2_pcoa_c_spp_fit$vectors$pvals) %>% 
+  filter(p < 0.05, r > 0.1)
+
+gr_m2_pcoa_c_axis <- BiodiversityR::axis.long(gr_m2_pcoa_c, choices = c(1, 2))
+
+gr_m2_pcoa_c_site_scores <- scores(gr_m2_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  inner_join(station_summary)
 ```
 
 ```{r}
-transect_summary %>% 
-  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
-  ggplot()+
-  geom_boxplot(aes(x = sublocation, y = value, fill = diver))+
-  facet_wrap("name", scales = "free")
+community_pcoa_plots <- map(c("habitat", "sublocation"), 
+    ~ ggplot() +
+      geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+      geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+      scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+      scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+      geom_point(data = gr_m2_pcoa_c_site_scores,
+                 aes(x = dbRDA1, y = dbRDA2,, col = .data[[.x]])) +
+      labs(x = gr_m2_pcoa_c_axis$label[1], y = gr_m2_pcoa_c_axis$label[2])+
+      geom_segment(data = gr_m2_pcoa_c_spp_scores %>% 
+                     filter(p < 0.05, r > 0.5), 
+                   aes(x = 0, y = 0, xend = dbRDA1*3, yend = dbRDA2*3, alpha = r), 
+                   colour = "black", 
+                   size = 0.2, 
+                   arrow = arrow(length = unit(0.01, "npc"), 
+                                 type = 'open', ends = "last"))+
+      ggrepel::geom_text_repel(data = gr_m2_pcoa_c_spp_scores %>% 
+                                 filter(p < 0.05, r > 0.5), 
+                               aes(x=dbRDA1*3, y=dbRDA2*3, label = ps_taxon_code, alpha = r),
+                               colour="black",
+                               show.legend = F) +
+      coord_fixed(ratio=1)+
+      labs(color = "", alpha = bquote('R'^'2'))+
+      ggforce::geom_mark_ellipse(data = gr_m2_pcoa_c_site_scores, 
+                                 aes(x=dbRDA1, y = dbRDA2, colour = .data[[.x]], 
+                                     fill=after_scale(alpha(colour, 0.01))), 
+                                 expand=0, size=0.2, show.legend=FALSE)+
+      theme(panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_line("gray25"),
+            text = element_text(size = 12, family = "Arial"),
+            axis.text = element_text(size = 10, colour = "gray25"),
+            axis.title = element_text(size = 12, colour = "gray25"),
+            legend.key = element_blank())+
+        paletteer::scale_color_paletteer_d("ggsci::default_jama")+
+      scale_alpha(range=c(0.6,1)))
 
-transect_summary %>% 
-  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
-  ggplot()+
-  geom_boxplot(aes(x = sublocation, y = value, fill = habitat))+
-  facet_wrap("name", scales = "free")
+community_pcoa_plots[[1]] %>% 
+  ggsave(filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_biomas_pcoa_by_habitat.png"), 
+       dpi = 300, width = 8, height = 6)
 
-transect_summary %>% 
-  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
-  ggplot()+
-  geom_boxplot(aes(x = sublocation, y = value, fill = depth_strata))+
-  facet_wrap("name", scales = "free")
+
+community_pcoa_plots[[2]] %>% 
+  ggsave(filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_biomas_pcoa_by_sublocation.png"), 
+       dpi = 300, width = 8, height = 6)
 ```
 
-## Alpha diversity
-
 ```{r}
-# Data are not normally distributed
-transect_summary %>% 
-  select(ind_m2, gr_m2, H, evenness) %>% 
-  rstatix::shapiro_test(ind_m2, gr_m2, H, evenness)
+anova(gr_m2_pcoa_c) # overall test of the significant of the analysis
+anova(gr_m2_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(gr_m2_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. variables
 ```
 
 ```{r}
-adonis2(transect_summary %>% 
-          select(ind_m2) ~  diver + depth_strata + habitat + sublocation, 
-        data = transect_summary,
-        strata = transect_summary$ps_station_id,
-        by = "margin",
-        method = "euclidean")
-
-adonis2(transect_summary %>% 
-          select(gr_m2) ~  diver + depth_strata + habitat + sublocation, 
-        data = transect_summary,
-        strata = transect_summary$ps_station_id,
-        by = "margin",
-        method = "euclidean")
-
-adonis2(transect_summary %>% 
-          select(H) ~  diver + depth_strata + habitat + sublocation, 
-        data = transect_summary,
-        strata = transect_summary$ps_station_id,
-        by = "margin",
-        method = "euclidean")
-
-adonis2(transect_summary %>% 
-          select(H, gr_m2, ind_m2) ~  diver + depth_strata + habitat + sublocation, 
-        data = transect_summary,
-        strata = transect_summary$ps_station_id,
+n_ind_adonis <- adonis2(gr_m2_dist ~  habitat  + sublocation,
+        data = station_summary[!station_summary$habitat %in% c("deep platform", "seagrass beds"), ],
+        #strata = transect_summary[transect_summary$n_ind > 10, ]$ps_station_id,
         by = "margin")
-```
-```{r}
-## Q: Should Shannon index be computed per transect and then averaged ?
-caribe_fish_diversity_barplot <- transect_summary %>% 
-  group_by(sublocation, habitat) %>% 
-  summarize(across(c(H, evenness), list(avg = mean, sd = sd), na.rm = T)) %>% 
-  pivot_longer(-c(sublocation, habitat), 
-               names_to = c('variable', 'metric'),
-               names_sep = "_",
-               values_to = "score") %>% 
-  pivot_wider(names_from = metric, values_from = score) %>% 
-  ggplot()+
-  geom_col(aes(sublocation, avg, fill = fct_reorder(habitat, avg)), 
-           position = position_dodge2(width = 0.9, preserve = "single"),
-           alpha = 0.9) +
-  geom_errorbar(aes(x = sublocation,
-                    ymax = avg + sd,
-                    ymin = avg - sd,
-                    fill = fct_reorder(habitat, avg)), 
-                position = position_dodge2(width = 0.1, preserve = "single"),
-                alpha = 0.5)+
-  #coord_flip()+
-  paletteer::scale_fill_paletteer_d("ggsci::default_jama")+
-  theme(legend.position = "bottom", plot.title.position = "plot") +
-  guides(fill = guide_legend(nrow=2,byrow=TRUE))+
-  labs(fill = "", x = "", title = "Reef fish species diversity")+
-  facet_wrap(~variable, scales = "free")
-  
-ggsave(caribe_fish_diversity_barplot, 
-       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_diversity_barplot.png"),       
-       dpi = 300, width = 6, height = 4)
+
+n_ind_adonis
 ```
 
 
-## Community dissimilarity
+### PCOA
 
-```{r}
+```{r, eval = F}
 min_ok_n <- 10
 
 max_n_samp <- min(transect_summary$n_ind[transect_summary$n_ind > min_ok_n])
@@ -325,11 +701,9 @@ n_ind_dist <- avgdist(as.matrix(n_ind_data_wide_trimmed),
                       sample = max_n_samp) 
 ```
 
-### PCOA
-
 #### Unconstrained
 
-```{r}
+```{r, eval = F}
 fish_pcoa <- dbrda(n_ind_dist ~ 1, 
                    data = transect_summary[transect_summary$n_ind > min_ok_n, ],
                    add = "lingoes")
@@ -356,7 +730,7 @@ fish_pcoa_site_scores <- scores(fish_pcoa) %>%
   inner_join(transect_summary)
 ```
 
-```{r}
+```{r, eval = F}
 map(c("habitat", "sublocation", "diver", "depth_strata"), 
     ~ ggplot() +
       geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
@@ -395,13 +769,13 @@ map(c("habitat", "sublocation", "diver", "depth_strata"),
 )
 ```
 
-```{r}
+```{r, eval = F}
 fish_pcoa_env_fit
 ```
 
 #### Constrained
 
-```{r}
+```{r, eval = F}
 fish_pcoa_c <- dbrda(n_ind_dist ~ diver + habitat + sublocation + depth_strata, 
                     data = transect_summary[transect_summary$n_ind > min_ok_n, ],
                     dist = "bray", 
@@ -431,7 +805,7 @@ fish_pcoa_c_site_scores <- scores(fish_pcoa_c)$sites %>%
 #summary(fish_pcoa_c)
 ```
 
-```{r}
+```{r, eval = F}
 map(c("habitat", "sublocation", "diver", "depth_strata"), 
     ~ ggplot() +
       geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
@@ -470,7 +844,7 @@ map(c("habitat", "sublocation", "diver", "depth_strata"),
 )
 ```
 
-```{r}
+```{r, eval = F}
 anova(fish_pcoa_c) # overall test of the significant of the analysis
 anova(fish_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
 anova(fish_pcoa_c, by = "terms", perm.max = 10000) # test for sign. environ. variables
@@ -478,7 +852,7 @@ anova(fish_pcoa_c, by = "terms", perm.max = 10000) # test for sign. environ. var
 
 ### NMDS
 
-```{r}
+```{r, eval = F}
 n_ind_MDS <- metaMDS(n_ind_dist, k = 2, trymax = 1000)
 
 n_ind_MDS$stress
@@ -507,7 +881,7 @@ n_ind_MDS_site_scores <- scores(n_ind_MDS, display = "sites") %>%
   inner_join(transect_summary)
 ```
 
-```{r}
+```{r, eval = F}
 map(c("habitat", "sublocation", "diver", "depth_strata"), 
     ~ ggplot() +
       geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
@@ -546,7 +920,7 @@ map(c("habitat", "sublocation", "diver", "depth_strata"),
 )
 ```
 
-```{r}
+```{r, eval = F}
 n_ind_adonis <- adonis2(n_ind_dist ~ diver + habitat + depth_strata + sublocation,
         data = transect_summary[transect_summary$n_ind > 10, ],
         strata = transect_summary[transect_summary$n_ind > 10, ]$ps_station_id,
@@ -555,7 +929,7 @@ n_ind_adonis <- adonis2(n_ind_dist ~ diver + habitat + depth_strata + sublocatio
 n_ind_adonis
 ```
 
-```{r}
+```{r, eval = F}
 sppscores(n_ind_MDS) <- n_ind_data_wide_trimmed
 
 n_ind_MDS_spp_scores_2 <- scores(n_ind_MDS)$species %>% 
@@ -598,33 +972,73 @@ map(c("habitat", "sublocation", "diver", "depth_strata"),
 
 ```
 
-## Summary tables
+# Additional figs
 
-```{r}
-fish_data_by_transect %>% 
-  group_by(sublocation) %>% 
-  summarize(n_stations = n_distinct(ps_station_id),
-            n_transects = n_distinct(transect_id),
-            n_taxa = n_distinct(ps_taxon_code)) %>% 
-  left_join(transect_summary %>% 
-              group_by(sublocation) %>% 
-               summarize(across(c(ind_m2, gr_m2, H), list(avg = mean, sd = sd)))) %>% 
-    mutate_if(is.numeric, round, 2)
+```{r, eval = F}
+transect_summary %>% 
+  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y = value, fill = diver))+
+  facet_wrap("name", scales = "free")
+
+transect_summary %>% 
+  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y = value, fill = habitat))+
+  facet_wrap("name", scales = "free")
+
+transect_summary %>% 
+  pivot_longer(c(ind_m2, gr_m2, H, richness, evenness)) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y = value, fill = depth_strata))+
+  facet_wrap("name", scales = "free")
 ```
 
-```{r}
-fish_data_by_transect %>% 
-  group_by(sublocation, taxon_sci_name) %>% 
-  summarise(n_transects = n_distinct(transect_id)) %>% 
-  ungroup() %>% 
-  group_by(sublocation) %>% 
-  mutate(f_obs = n_transects/n_distinct(n_transects)) %>% 
-  ungroup() %>% 
-  left_join(fish_data_by_transect %>% 
-              group_by(sublocation, taxon_sci_name) %>% 
-              summarize(across(c(ind_m2, gr_m2), list(avg = mean, sd = sd))) %>% 
-              ungroup()) %>% 
-  mutate_if(is.numeric, round, 2) %>% 
-  arrange(desc(gr_m2_avg))
+
+```{r, include = T}
+master_taxa <- read_csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv")) %>% 
+  filter(location == "Caribbean")
+
+dscm_elasmo <- c("Heptranchias perlo",
+                 "Galeus springeri",
+                 "Mustelus canis",
+                 "Alopias superciliosus") %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(taxon_id = if_else(!is.na(valid_aphia_id),
+                              paste0("WORMS:", valid_aphia_id),
+                              NA_character_)) %>% 
+  select(scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority,
+         kingdom, phylum, class, order, family, genus) %>% 
+  distinct() 
+
+master_taxa %>% 
+  filter(class == "Elasmobranchii", taxon_rank == "Species") %>% 
+  select(class, order, family, genus,taxon_sci_name, iucn_redlist_cat, iucn_trend) %>% 
+  distinct() %>% 
+  filter(!is.na(iucn_redlist_cat)) %>% 
+  bind_rows(dscm_elasmo %>% 
+              select(class, order, family, genus, taxon_sci_name = taxon_valid_name)) %>% 
+  arrange(class, order, family) %>%
+  select(-class, -genus) %>% 
+  flextable::flextable() %>% 
+  flextable::merge_v(j = c("order", "family")) %>% 
+  flextable::autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
 ```
+
+```{r, include = T}
+master_taxa %>% 
+  filter(!is.na(iucn_redlist_cat), 
+         !iucn_redlist_cat %in%c("Least Concern", "Data Deficient")) %>% 
+  select(phylum, class, order, family, taxon_sci_name, iucn_redlist_cat, iucn_trend) %>% 
+  distinct() %>% 
+  arrange(class, order, family) %>%
+  flextable::flextable() %>% 
+  flextable::merge_v(j = c("phylum","class","order", "family")) %>% 
+  flextable::autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
 

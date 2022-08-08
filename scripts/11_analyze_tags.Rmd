@@ -1,0 +1,86 @@
+---
+title: "Process sat tags bruvs"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(flextable)
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+library(tidyverse)
+source("_prj_vars.R")
+
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+tags_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "tags_meta.csv")) %>% 
+  filter(location == "Caribbean")
+
+tags_capture <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                              "data/primary/raw",
+                                              "tags","Drumline_Data.xlsx"), 
+                                    sheet = "Captures") %>% 
+  janitor::clean_names() 
+
+tags_meta <- tags_meta %>% 
+  group_by(date, sublocation, ps_station_id) %>% 
+  summarize(lat = first(lat), 
+            lon = first(lon), 
+            time_in = first(time_in),
+            time_out = last(na.omit(time_out)),
+            shark = sum(!is.na(capture)) > 0) %>% 
+  mutate(soak_time = paste(hour(seconds_to_period(time_out - time_in)),
+                              minute(seconds_to_period(time_out - time_in)), sep = ":")) %>% 
+  ungroup()
+
+tags_meta %>% 
+  group_by(sublocation) %>% 
+  summarise(n_hooks = n_distinct(ps_station_id), 
+            effort_hrs = sum(as.duration(hm(soak_time)))/3600,
+            n_sharks = sum(shark))
+```
+
+We deployed `r n_distinct(tags_meta$ps_station_id[tags_meta$sublocation == "Bajo Nuevo"])` hooks in Bajo Nuevo and `r n_distinct(tags_meta$ps_station_id[tags_meta$sublocation == "Serranilla"])` in Serranilla, amounting to a total fishing effort of 38.2 and 80.3 hours respectively. This effort resulted in 8 sharks captured in Bajo Nuevo and 14 in Serranilla. All captured sharks were measured and sexed. Fin clips, anal swabs, and tissue samples were taken for posterior DNA analysis. Notably, all five tiger sharks (*G. cuvier*) captured were female and all were fitted with satellite telemetry tags. One large male great hammerhead (*S. mokarran*) was successfully tagged in Serranilla and the remaining tagged sharks were Caribbean reef sharks. Four months after the sharks were tagged, no messages have been received from the satellite meaning that the sharks are alive and their activity is actively being recorded.  
+
+```{r include = T, echo = F}
+tags_capture %>% 
+  filter(!is.na(species)) %>% 
+  left_join(tags_meta %>% 
+              distinct(date, sublocation)) %>% 
+  group_by(sublocation, species, sex) %>% 
+  summarise(captured = n(),
+            min_tl = min(tl_cm, na.rm = T),
+            max_tl = max(tl_cm, na.rm = T),
+            tagged = sum(!is.na(sat_tag_number))) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+```{r, include = T, echo = F}
+tags_meta %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  mutate(time_in = format(time_in, '%H:%M')) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+
+
+

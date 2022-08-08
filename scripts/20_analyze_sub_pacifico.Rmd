@@ -319,6 +319,7 @@ ggsave(plot = niphobles_violin,
        dpi = 300)
 ```
 
+
 # Bajo Nuevo
 
 ```{r}
@@ -351,6 +352,7 @@ bn_fish_obs %>%
   geom_col(aes(depth_bin, n_taxa, fill = family))+
   coord_flip()
 ```
+
 ### New records 
 
 ```{r}

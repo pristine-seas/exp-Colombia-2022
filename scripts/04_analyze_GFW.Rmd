@@ -12,73 +12,27 @@ output:
     highlight: haddock
 ---
 
-```{r}
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
 library(raster)
 library(sf)
 library(bigrquery)
-library(connections)
+#library(connections)
 library(tidyverse)
 
-options(scipen = 999)
+source("_prj_vars.R")
 
-ps_data_path <- "/Volumes/ps-science/datasets/"
-
-ps_exp_path <- "/Volumes/Colombia - 2022/"
-
-default_font_family <- "Arial"
-
-default_font_color <- '#22211d'
-
-default_background_color <- "#f5f5f2"
-
-theme_map <- function(...) {
-  theme_minimal() +
-    theme(
-      text = element_text(family = default_font_family,
-                          color = default_font_color),
-      # remove all axes
-      # add a subtle grid
-      panel.grid.major = element_line(color = "#dbdbd9", size = 0.2),
-      panel.grid.minor = element_blank(),
-      # background colors
-      plot.background = element_rect(fill = default_background_color,
-                                     color = NA),
-      panel.background = element_rect(fill = default_background_color,
-                                      color = NA),
-      legend.background = element_rect(fill = default_background_color,
-                                       color = NA),
-      # borders and margins
-      plot.margin = unit(c(.5, .5, .2, .5), "cm"),
-      panel.border = element_blank(),
-      panel.spacing = unit(c(-.1, 0.2, .2, 0.2), "cm"),
-      # titles
-      legend.title = element_text(size = 11),
-      legend.text = element_text(size = 9, hjust = 0,
-                                 color = default_font_color),
-      plot.title = element_text(size = 15, hjust = 0.5,
-                                color = default_font_color),
-      plot.subtitle = element_text(size = 10, hjust = 0.5,
-                                   color = default_font_color,
-                                   margin = margin(b = -0.1,
-                                                   t = -0.1,
-                                                   l = 2,
-                                                   unit = "cm"),
-                                   debug = F),
-      # captions
-      plot.caption = element_text(size = 7,
-                                  hjust = .5,
-                                  margin = margin(t = 0.2,
-                                                  b = 0,
-                                                  unit = "cm"),
-                                  color = "#939184"),
-      ...
-    )
-}
+load(file = file.path(ps_exp_path, 
+                      "data", "secondary", "processed", "admin_spatial_layers.RData"))
 ```
 
-```{r}
-load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
-```
 
 # Upload ROIs to BQ
 
@@ -469,6 +423,7 @@ fishing_activity %>%
   geom_col(aes(x = year, y = fishing_hours,  fill = ocean), position = "dodge")+
   theme_light()
 ```
+
 ```{r}
 fishing_activity %>% 
   filter(eez == "8426" & !is.na(ocean)) %>%
@@ -577,6 +532,10 @@ st_write(sar_detections,
 
 ## Map detections
 
+```{r}
+sar_detections <- read_rds(file.path(ps_exp_path, "data", "secondary", "processed","gfw_sar_detects.rds"))
+```
+
 ### Pacific
 
 ```{r}
@@ -610,14 +569,15 @@ sar_detections %>%
   paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
   guides(col = guide_legend(frame.colour = "black", 
                                ticks.colour = "black", 
-                               title.position = "top"))+
+                               title.position = "top"))
   ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pacifico.png"), 
          dpi = 300)
 ```
+
 ### Seaflower
 
 ```{r}
-sar_detections %>% 
+seaflower_detects <- sar_detections %>% 
   filter(nombre == "Seaflower") %>% 
   mutate(matched = score > 10^-3) %>% 
   ggplot()+
@@ -636,12 +596,13 @@ sar_detections %>%
         panel.background = element_blank(),
         legend.position = "bottom",
         legend.title.align = 0.5)+
-  labs(title = "Unmatched SAR vessel detections",
+  labs(title = "Vessel detections",
        subtitle = "2016-2020",
        x = "", y = "")+
-  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
-   ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_seaflower.png"), 
-         dpi = 300)
+  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)
+
+ggsave(seaflower_detects, filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_seaflower.png"), 
+       dpi = 300)
 ```
 
 ### PnChoco
@@ -678,6 +639,7 @@ sar_detections %>%
   ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pnch.png"), 
          dpi = 300)
 ```
+
 ## Summary and trends
 
 ```{r}
@@ -702,6 +664,130 @@ sar_detections %>%
   ggsave(filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_pnch_monthly.png"), 
          dpi = 300)
 ```
+
+```{r}
+caribe_sat_img <- terra::rast(file.path(ps_exp_path, 
+                               "data", "secondary", "raw", 
+                               "Allen atlas", "Coral-Reefs-2020-Visual-V1-Mosaic", "satellite_imagery_0.tif")) 
+
+bajos_eez <- bajos_eez %>% 
+  st_transform(crs(caribe_sat_img)) 
+  
+bn_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Bajo Nuevo Bank") %>% 
+                terra::ext(), mask = T) 
+
+serr_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Serranilla Bank") %>% 
+                terra::ext(), mask = T) 
+```
+
+```{r}
+bn_sar_zoom <- sar_detections %>% 
+  filter(nombre == "Bajo Nuevo") %>% 
+  mutate(matched = score > 10^-3) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_jitter(.001)%>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^7)+
+  geom_sf(col = "white", size = 1, shape = 8)+
+  coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",  name = "")+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "", shape = "")+
+  theme(legend.position = c(0.87, 0.35),
+        legend.text = element_text(colour = "white"), 
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(bn_sar_zoom,
+       filename = file.path(ps_exp_path, "figures", "bajo_nuevo_SAR_zoom.png"), 
+       dpi = 300, height = 5, width = 6.5)
+```
+
+```{r}
+ser_sar_zoom <- sar_detections %>% 
+  filter(nombre == "Serranilla") %>% 
+  mutate(matched = score > 10^-3) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_jitter(.001)%>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^7)+
+  geom_sf(col = "white", size = 1, shape = 8)+
+  coord_sf(xlim = c(-79.9, -79.7), ylim = c(15.72, 15.9))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",  name = "")+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "", shape = "")+
+  theme(legend.position = c(0.87, 0.2),
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "white"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(ser_sar_zoom,
+       filename = file.path(ps_exp_path, "figures", "ser_nuevo_SAR_zoom.png"), 
+       dpi = 300)
+```
+
+```{r}
+monthly_pattenrs <- sar_detections %>% 
+  filter(nombre %in% c("Serranilla", "Bajo Nuevo")) %>%
+  mutate(month = lubridate::month(date, label = T)) %>% 
+  group_by(nombre, month) %>% 
+  summarise(n_detections = n_distinct(detect_id)) 
+  #pivot_wider(names_from = nombre, values_from = n_detections)
+```
+
+```{r}
+sar_monthly_bar <- monthly_pattenrs %>% 
+  ggplot()+
+  geom_col(aes(month, n_detections, fill = nombre), position = "dodge")+
+  theme(axis.ticks = element_line(),
+        axis.text = element_text(family = "Arial"),
+        axis.title = element_text(family = "Arial"),
+        plot.title.position = "plot",
+        panel.background = element_blank())+
+  labs(title = "",
+       x = "", y = "", fill  = "")+
+    paletteer::scale_fill_paletteer_d("ggsci::default_jama")
+
+ggsave(sar_monthly_bar,
+       filename = file.path(ps_exp_path, "figures", "seaflower_monthly_SAR.png"), 
+       width = 8, height = 6,
+       dpi = 300)
+```
+
 ```{r}
 sar_detections %>% 
   filter(nombre == "Serranilla") %>% 

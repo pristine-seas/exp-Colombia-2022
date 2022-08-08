@@ -37,7 +37,8 @@ dscm_data <- read_csv(file.path(ps_exp_path,
                                 "COL_dscm_annotations.csv"), 
                       trim_ws = T, skip_empty_rows = T)
 
-dscm_meta <- read_csv(file.path(ps_exp_path, "data", "primary", "processed","metadata" ,"dscm_meta.csv"))
+dscm_meta <- read_csv(file.path(ps_exp_path, "data", "primary", 
+                                "processed", "metadata" ,"dscm_meta.csv"))
 
 dscm_data <- dscm_data %>% 
   left_join(dscm_meta %>% select(ps_station_id, location))
@@ -537,5 +538,6 @@ clean_master_taxa %>%
   arrange(taxon_sci_name) %>% 
   write_csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv"))
 ```
+
 
 

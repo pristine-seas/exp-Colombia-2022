@@ -1,0 +1,49 @@
+---
+title: "Process dropcams"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(tidyverse)
+library(flextable)
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+library(terra)
+source("_prj_vars.R")
+
+knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
+  set_flextable_defaults(
+  font.family = "Arial", font.size = 9, 
+  theme_fun = "theme_vanilla",
+  big.mark="", table.layout="autofit")
+  
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+dscm_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "dscm_meta.csv")) %>% 
+  filter(location == "Caribbean")
+```
+
+```{r include = T, echo = F}
+dscm_meta %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  dplyr::select(date, location = sublocation, ps_station_id, lat = lat_in, lon = lon_in, depth = max_depth_m, time_in = time_in, duration = mission_duration, rec_time = recording_time) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+

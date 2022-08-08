@@ -1,0 +1,113 @@
+---
+title: "Process sub in Bajo Nuevo"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(flextable)
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+library(terra)
+library(tidyverse)
+source("_prj_vars.R")
+
+knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
+  set_flextable_defaults(
+  font.family = "Arial", font.size = 9, 
+  theme_fun = "theme_vanilla",
+  big.mark="", table.layout="autofit")
+  
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+sub_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "sub_meta.csv")) %>% 
+  filter(location == "Caribbean")
+
+sub_taxa <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
+  filter(method == "sub", location == "Caribbean")
+```
+
+```{r, include = T, echo = F}
+bn_fish_obs <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
+                                              "sub","files/bajo_nuevo_annotations.xlsx"),
+                  sheet = "fish obs") %>% 
+  filter(!is.na(taxa)) %>% 
+  select(-notes) %>% 
+  mutate(time = format(time, format = "%H:%M:%S"),
+         ps_station_id = if_else(ps_station_id == "SEA_sub_01", "COL_sub_19", "COL_sub_20"))
+
+bn_fish_obs <- bn_fish_obs %>% 
+  left_join(sub_taxa %>% 
+              select(taxa = taxon, taxon_sci_name, family, order)) %>% 
+  filter(!is.na(family)) 
+```
+
+Weather conditions allowed us to make only two dives with the DeepSee submersible in Bajo Nuevo at maximum depths of 150 and 300 meters respectively. A gently sloping shelf quickly transitioned to a vertical wall starting around 80 meters and continuing well beyond 300 meters. The vertical wall was predominantly covered by sponges and encrusting algae with some interspersed soft corals. 
+
+Crevices and cracks in the wall provided shelter for several fish species. We recorded a total of `r n_distinct(bn_fish_obs$taxa)` different fish taxa belonging to `r n_distinct(bn_fish_obs$family)` families. The most abundant fish species was the blackcap basslet (*Gramma melacara*), followed by (*Xanthicthys ringens*) and (*Chromis insolata*). Fish species richness and abundance decreased with depth and only five species were observed deeper than 200 meters. Notably, two of these species: the french butterflyfish (*Prognathodes guyanensis*) and the golden bass (*Lipoproma aberrans*) represent new records for the archipelago of San Andres and Old Providence. Also, the Spanish flag (*Gonioplectrus hispanus*), observed at 177 meters, and Northern red snapper (*Lutjanus campechanus*) observed at 150 meters, are new additions to the inventory of fish species of the archipelago. 
+
+```{r}
+bn_fish_obs %>% 
+  filter(depth > 200) %>% 
+  group_by(taxa) %>% 
+  summarize(min_depth = min(depth), 
+            max_depth = max(depth), 
+            sum_ind = sum(n_ind)) %>% 
+  arrange(desc(sum_ind)) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+```{r, include = T, echo = F}
+sub_bajo_nuevo_barplot <- bn_fish_obs %>% 
+  filter(depth > 80) %>% 
+  mutate(depth_bin = cut(depth, seq(0, 300, by = 20))) %>% 
+  group_by(depth_bin) %>% 
+  summarize(n_taxa = n_distinct(taxa),
+            n_ind = sum(n_ind)) %>% 
+  pivot_longer(!depth_bin) %>% 
+  ggplot()+
+  geom_col(aes(x = depth_bin, y = value, fill = name), position = "dodge")+
+  labs(y = "", x = "Depth (m)")+
+  paletteer::scale_fill_paletteer_d("awtools::mpalette", labels = c("# of individuals", "# taxa"))+
+  bbplot::bbc_style()
+
+ggsave(plot = sub_bajo_nuevo_barplot, 
+       filename = file.path(ps_exp_path, "figures", "sub_bajo_nuevo_fish_barplot.png"),
+        width = 12)
+```
+
+```{r}
+peces_sai <- readxl::read_excel(file.path(ps_exp_path, "data/secondary/raw/biodiversidad del mar de los 7 colores", "PECES_REV.xlsx")) 
+```
+
+```{r}
+sub_taxa %>% 
+  filter(taxon_rank == "Species", !taxon_sci_name %in% peces_sai$Especie)
+```
+```{r include = T, echo = F}
+sub_meta %>% 
+  select(date, ps_station_id, dive_start, bottom_time, lat = surface_start_lat, lon = surface_start_lon, max_depth, temp_at_max_depth) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+

@@ -1,0 +1,189 @@
+---
+title: "Process seabird"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(tidyverse)
+library(flextable)
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+library(terra)
+source("_prj_vars.R")
+
+knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
+  set_flextable_defaults(
+  font.family = "Arial", font.size = 9, 
+  theme_fun = "theme_vanilla",
+  big.mark="", table.layout="autofit")
+  
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+birds_fieldsheet <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                          "data/primary/raw",
+                                          "birds","Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                                sheet = "Transect meta") %>% 
+  janitor::clean_names() %>% 
+  filter(location == "Seaflower") %>% 
+  mutate(location = "Caribbean")
+
+birds_meta <- birds_fieldsheet %>% 
+  transmute(location, sublocation, ps_station_id, 
+            method = "Seabird transects",
+            date = ymd(date),
+            time_start = hms::as_hms(time_start),
+            duration_mins,
+            lat_start,
+            long_start,
+            lat_stop = as.numeric(lat_stop),
+            long_stop,
+            distance_km, 
+            paired_pelagic, 
+            string, 
+            drop_pickup, 
+            vessel, 
+            observer = "Chris Thompson") %>% 
+    mutate(location = case_when(str_detect(sublocation, "Transit") ~ "Transit",
+                              str_detect(sublocation, "Bajo Nuevo") ~ "Bajo Nuevo",
+                              str_detect(sublocation, "Serranilla") ~ "Serranilla",
+                              TRUE ~ NA_character_)) 
+
+birds_census <- readxl::read_xlsx(file.path(ps_exp_path, 
+                            "data/primary/raw",
+                            "birds","Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                  sheet = "Transect meta") %>% 
+  filter(Location == "Seaflower") %>% 
+  dplyr::select(-c(1:16)) %>% 
+  mutate_all(as.numeric) %>% 
+  mutate(ps_station_id = birds_meta$ps_station_id,
+         sublocation = birds_meta$sublocation) %>% 
+  pivot_longer(-c("ps_station_id", "sublocation"), names_to = "taxa", values_to = "n_ind") %>% 
+  mutate(taxa = if_else(str_detect(taxa, "red-footed"), "Red footed booby", taxa)) %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(n_ind = sum(n_ind)) %>% 
+  filter(n_ind > 0, !taxa %in% c("shorebird sp", "grey mid-size petrel")) %>% 
+  ungroup() %>% 
+  mutate(location = case_when(str_detect(sublocation, "Transit") ~ "Transit",
+                              str_detect(sublocation, "Bajo Nuevo") ~ "Bajo Nuevo",
+                              str_detect(sublocation, "Serranilla") ~ "Serranilla",
+                              TRUE ~ NA_character_)) %>% 
+  dplyr::select(location, everything()) %>% 
+  rename(common_name = taxa) %>% 
+  mutate(common_name = str_to_sentence(common_name))
+```
+
+```{r, eval = F}
+birds_taxa <- birds_census %>% 
+  distinct(common_name) %>% 
+  left_join(readxl::read_xlsx(file.path(ps_exp_path, 
+                                        "data/primary/raw",
+                                        "birds","Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                              sheet = "Species Seaflower") %>% 
+              janitor::clean_names() %>% 
+              dplyr::select(common_name = taxa, binomial) %>% 
+              mutate(common_name = str_to_sentence(common_name))
+              ) %>% 
+  dplyr::select(common_name, sci_name = binomial)
+
+birds_taxa$sci_name[birds_taxa$common_name == "Common noddy"] <- "Anous stolidus"
+birds_taxa$sci_name[birds_taxa$common_name == "Smooth-billed ani"] <- "Crotophaga ani"
+birds_taxa$sci_name[birds_taxa$common_name == "Blue-winged teal"] <- "Anas discors"
+
+birds_taxa_gbif <- bdc_query_names_taxadb(birds_taxa$sci_name,
+                                         replace_synonyms = TRUE,
+                                         suggest_names = TRUE,
+                                         suggestion_distance = 0.8,
+                                         db = "gbif",
+                                         parallel = TRUE,
+                                         ncores = 2,
+                                         export_accepted = FALSE) %>% 
+  janitor::clean_names()
+
+birds_taxa <- birds_taxa_gbif %>% 
+  dplyr::select(original_search, scientific_name, family, order) %>% 
+  left_join(birds_taxa, 
+            by = c("original_search" = "sci_name")) 
+
+write_csv(birds_taxa, "birds_taxa.csv")
+```
+
+```{r}
+birds_taxa <- read_csv("birds_taxa.csv")
+```
+
+
+We recorded the abundance of seabird species present during the deployment and recovery of each of our pelagic BRUVS (Baited Remote Underwater Video System) sets, to develop a record of seabird species presence and abundance. We also made additional opportunistic records of seabird species presence off transect. In `r nrow(birds_meta[birds_meta$location == "Serranilla", ])` transects conducted in Serranilla, `r nrow(birds_meta[birds_meta$location == "Bajo Nuevo", ])` in Bajo Nuevo, and `r nrow(birds_meta[!birds_meta$location == "Transit", ])` while in transit, we observed `r nrow(birds_taxa)` species of birds belonging to `r n_distinct(birds_taxa$family)` families. While some species were observed in both atolls - the magnificent frigate (*Fregata magnificens*) and the peregrine falcon (*Falco peregrinus*) - several others were found in only one of the two. In Serranilla, the barn swallow (*Hirundo rustica*) and brown noddy (*Anous stolidus*), were recorded in 12% of surveys but were absent in Bajo Nuevo. Additionally, the smooth-billed ani (*Crotophaga ani*)  and the bank swallow (*Riparia riparia*) were exclusive to Serranilla's Cay. Conversely, the black-faced petrel(*Pterodroma hasitata*) was exclusive to Bajo Nuevo where it was observed in 30% of the surveys and so was the glossy ibis (*Plegadis falcinellus*); which was seen once but in a relatively large flock (19 animals). While in transect to and from San Andres, two more species not seen elsewhere - the Atlantic brown booby (*Sula leucogaster*) and the roseate tern (*Sterna dougallii*) - were documented although in small numbers.  Off transect, we registered five additional bird species: , laughing gull (*Leucophaeus atricilla*) and great blue heron (*Ardea herodias*) in Serranilla, cattle egret (*Bubulcus ibis*), royal tern (*Thalasseus maximus*) and osprey (*Pandion haliaetus*) in Bajo Nuevo. 
+
+```{r include = T, echo = F}
+birds_census %>% 
+  group_by(location, common_name) %>% 
+  summarize(sum_ind = sum(n_ind),
+            n_stations = n_distinct(ps_station_id)) %>% 
+  ungroup() %>% 
+  mutate(freq_occur = case_when(
+    location == "Bajo Nuevo" ~ n_stations/nrow(birds_meta[birds_meta$location == "Bajo Nuevo", ]),
+    location == "Serranilla" ~ n_stations/nrow(birds_meta[birds_meta$location == "Serranilla", ]),
+    TRUE ~ n_stations/nrow(birds_meta[!birds_meta$location == "Transit", ]))) %>% 
+  mutate(freq_occur = round(100*freq_occur, 1)) %>% 
+  dplyr::select(-n_stations) %>% 
+  pivot_longer(-c(location, common_name)) %>% 
+  pivot_wider(names_from = c(location, name), values_from = value) %>% 
+  left_join(birds_taxa %>% 
+              dplyr::select(common_name, scientific_name, family)) %>% 
+  dplyr::select(family, scientific_name, everything(), -common_name) %>% 
+  arrange(family, scientific_name) %>% 
+  flextable() 
+  set_header_labels(values = list(family = "Family", taxa = "Taxa", 
+                                  `Bajo Nuevo_sum_ind` = "# individuals",
+                                  `Bajo Nuevo_freq_occur` = "% Ocurrence",
+                                  `Serranilla_sum_ind` = "# individuals",
+                                  `Serranilla_freq_occur` = "% Ocurrence",
+                                  `Transit_sum_ind` = "# individuals",
+                                  `Transit_freq_occur` = "% Ocurrence")) %>% 
+  flextable::add_header_row(values = c("", "", "Bajo Nuevo", "Serranilla", "Transit"), 
+                            colwidths = c(1,1,2,2, 2)) %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+```{r}
+readxl::read_xlsx(file.path(ps_exp_path, 
+                                        "data/primary/raw",
+                                        "birds","Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                              sheet = "Species Seaflower") %>% 
+              janitor::clean_names() %>% 
+              dplyr::select(common_name = taxa, binomial) %>% 
+              mutate(common_name = str_to_sentence(common_name)) %>% 
+  filter(!common_name %in% birds_census$common_name)
+```
+
+
+Metadata
+
+
+```{r include = T, echo = F}
+birds_meta %>% 
+  arrange(date) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  dplyr::select(date, location, ps_station_id, lat_start, long_start, time_start, duration_mins) %>% 
+  flextable() %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  flextable::align(align = "center", part = "all")
+```
+
+

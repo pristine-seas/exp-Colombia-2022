@@ -1,0 +1,255 @@
+---
+title: "Process YSI"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+uvc_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "uvc_meta.csv")) %>% 
+  filter(location == "Caribbean")
+
+ysi_meta <- read_csv(file.path(ps_exp_path, "data", "primary", "processed/metadata", "ysi_meta.csv"))
+
+
+station_ids <- tibble(ps_station_id = list.files(file.path(ps_exp_path, 
+                                                           "data/primary/raw",
+                                                           "ysi/files"),
+                                                 full.names = F, 
+                                                 pattern = "COL_ysi") %>% 
+                        str_remove_all("\\.csv") ) %>% 
+  rowid_to_column(var = "station_number")
+
+og_names <- stringr::str_to_lower(c("DATE",	"TIME",	"SITE",	"DATA ID",	"GPS Latitude", "GPS Longitude",	"Barometer (mmHg)",	"pH",	"pH (mV)", "Chlorophyll (RFU)",	"Chlorophyll (µg/L)",	"PE (RFU)",	"PE (ug/L)",	"Cond (µS/cm)",	"Sp Cond (µS/cm)",	"Sal (psu)",	"nLFCond (µS/cm)",	"TDS (mg/L)",	"Temp (∞F)",	"Resistivity (ohms-cm)",	"Sigma-T (s t)", "Sigma (s)", "ODO (% Sat)",	"ODO (mg/L)",	"Pressure (psi a)", "Depth (m)", 	"Vertical Position (m)"))
+
+ysi_profiles <- list.files(file.path(ps_exp_path, 
+                                 "data/primary/raw",
+                                 "ysi/files"), 
+                       full.names = T, 
+                       pattern = "COL_ysi") %>% 
+  purrr::map_dfr(.f = read_csv, 
+                 skip = 6, 
+                 col_names = og_names, 
+                 .id = "station_number") %>%
+  janitor::clean_names() %>% 
+  mutate(station_number = as.numeric(station_number)) %>% 
+  dplyr::select(station_number, date, time, depth_m, barometer_mmhg, ph, 
+                chlorophyll_ug_l = chlorophyll_mg_l, cond_ms_cm, sal_psu, temp_f, odo_percent_sat, odo_mg_l) %>% 
+  left_join(station_ids) %>% 
+  dplyr::select(ps_station_id, everything(), -station_number)
+
+ysi_meta <- ysi_meta %>% 
+  filter(location == "Caribbean")
+
+ysi_profiles <- ysi_profiles %>% 
+  inner_join(ysi_meta %>% 
+               select(ps_station_id, sublocation, paired_station_id, lat, lon))
+
+ysi_profiles <- ysi_profiles %>% 
+  left_join(uvc_meta %>% 
+              filter(method == "Fish visual census") %>% 
+              select(paired_station_id = old_ps_station_id, uvc_depth = depth_m, uvc_station = ps_station_id))
+```
+
+# Profiles
+
+```{r}
+ysi_profiles <- ysi_profiles %>% 
+  filter(depth_m > 1, odo_percent_sat > 0, chlorophyll_ug_l < 10) %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  arrange(time) %>% 
+  mutate(flag = cumsum(ifelse(depth_m < max(depth_m), 1, NA))) %>% 
+  filter(!is.na(flag)) %>% 
+  mutate(depth_m = depth_m) %>% 
+  ungroup()
+```
+
+```{r}
+ysi_plot <- ysi_profiles %>% 
+  select(sublocation, ps_station_id, depth_m, odo_mg_l, chlorophyll_ug_l, ph, sal_psu, temp_f) %>% 
+  pivot_longer(-c("sublocation", "ps_station_id", "depth_m")) %>% 
+  ggplot()+
+  geom_line(aes(x = -1*depth_m, 
+                y =  value, 
+                col = sublocation,
+                group  = ps_station_id), 
+            show.legend = T)+
+  coord_flip()+
+  paletteer::scale_color_paletteer_d("rcartocolor::Vivid")+
+  theme_light()+
+  facet_wrap("name", scale = "free")
+
+ggsave(plot = ysi_plot,
+       filename = file.path(ps_exp_path, "figures", "ysi_caribe_profiles.png"), 
+       width = 10,
+       dpi = 300)
+```
+
+```{r}
+paired_ysi_uvc <- ysi_profiles %>% 
+  select(-lon, -lat) %>% 
+  filter(!if_any(where(is.numeric), ~ . < 0)) %>% 
+  mutate(depth_m = depth_m) %>% 
+  group_by(uvc_station, uvc_depth) %>% 
+  slice(which.min(abs(uvc_depth - depth_m))) %>% 
+  select(date, sublocation, ps_station_id, uvc_station, time, everything()) %>% 
+  ungroup()
+
+paired_ysi_uvc %>% 
+  group_by(sublocation) %>% 
+  summarise_at(vars(odo_mg_l, chlorophyll_ug_l, ph, sal_psu, temp_f), mean)
+
+write_csv(paired_ysi_uvc, file.path(ps_exp_path, "data", "primary", "processed/metadata", "paired_ysi_uvc.csv"))
+```
+
+
+```{r}
+paired_ysi_uvc %>% 
+  select(sublocation, ps_station_id, depth_m, odo_mg_l, chlorophyll_ug_l, ph, sal_psu, temp_f) %>% 
+  pivot_longer(-c("sublocation", "ps_station_id", "depth_m")) %>% 
+  ggplot()+
+  geom_boxplot(aes(x = sublocation, y =  value))+
+  facet_wrap("name", scales = "free")
+```
+
+```{r}
+paired_ysi_uvc %>% 
+  #select(chlorophyll_ug_l, odo_mg_l, ph, temp_f, sal_psu) %>% 
+  rstatix::shapiro_test(chlorophyll_ug_l, odo_mg_l, ph, temp_f, sal_psu)
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(chlorophyll_ug_l) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin",
+               method = "euclidean")
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(odo_mg_l) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin",
+               method = "euclidean")
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(ph) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin",
+               method = "euclidean")
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(temp_f) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin",
+               method = "euclidean")
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(sal_psu) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin",
+               method = "euclidean")
+
+vegan::adonis2(paired_ysi_uvc %>% 
+                 select(sal_psu, temp_f, ph, odo_mg_l, chlorophyll_ug_l) ~  sublocation + depth_m, 
+               data = paired_ysi_uvc,
+               by = "margin")
+```
+
+```{r}
+ysi_dist <- paired_ysi_uvc %>% 
+  select(odo_mg_l, chlorophyll_ug_l, ph, sal_psu, temp_f) %>% 
+  as.matrix() %>% 
+  vegan::vegdist(method = "bray")
+
+ysi_pcoa_c <- vegan::dbrda(ysi_dist ~ sublocation + depth_m, 
+                           data = paired_ysi_uvc,
+                           dist = "bray", 
+                           add = "lingoes")
+
+
+anova(ysi_pcoa_c) # overall test of the significant of the analysis
+anova(ysi_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(ysi_pcoa_c, by = "terms", perm.max = 10000) # test for sign. environ. variables
+```
+
+```{r}
+ysi_pcoa_c_env_fit <- vegan::envfit(ysi_pcoa_c, 
+                                    paired_ysi_uvc %>% 
+                                      select(sublocation, depth_m))
+
+ysi_pcoa_c_spp_fit <- vegan::envfit(ysi_pcoa_c, 
+                                     paired_ysi_uvc %>% 
+                                         select(odo_mg_l, chlorophyll_ug_l, ph, sal_psu, temp_f))
+
+ysi_pcoa_c_spp_scores <- ysi_pcoa_c_spp_fit %>% 
+  vegan::scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = ysi_pcoa_c_spp_fit$vectors$r,
+         p = ysi_pcoa_c_spp_fit$vectors$pvals) %>% 
+  filter(p < 0.05, r > 0.1)
+
+ysi_pcoa_c_axis <- BiodiversityR::axis.long(ysi_pcoa_c, choices = c(1, 2))
+
+ysi_pcoa_c_site_scores <- vegan::scores(ysi_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  cbind(sublocation = paired_ysi_uvc$sublocation)
+```
+
+```{r}
+ysi_pcoa_plot <- ggplot() +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  geom_point(data = ysi_pcoa_c_site_scores,
+             aes(x = dbRDA1, y = dbRDA2, col = sublocation) )+
+  labs(x = ysi_pcoa_c_axis$label[1], y = ysi_pcoa_c_axis$label[2])+
+  geom_segment(data = ysi_pcoa_c_spp_scores %>% 
+                 filter(p < 0.05), 
+               aes(x = 0, y = 0, xend = dbRDA1*.5, yend = dbRDA2*.5, alpha = r), 
+               colour = "black", 
+               size = 0.2, 
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             type = 'open', ends = "last"))+
+  ggrepel::geom_text_repel(data = ysi_pcoa_c_spp_scores %>% 
+                             filter(p < 0.05), 
+                           aes(x=dbRDA1*.5, y=dbRDA2*.5, label = ps_taxon_code, alpha = r),
+                           colour="black",
+                           show.legend = F) +
+  coord_fixed(ratio=1)+
+  ggforce::geom_mark_ellipse(data = ysi_pcoa_c_site_scores, 
+                             aes(x=dbRDA1, y = dbRDA2, colour = sublocation, 
+                                 fill=after_scale(alpha(colour, 0.01))), 
+                             expand=0, size=0.2, show.legend=FALSE)+
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line("gray25"),
+        text = element_text(size = 12, family = "Arial"),
+        axis.text = element_text(size = 10, colour = "gray25"),
+        axis.title = element_text(size = 12, colour = "gray25"),
+        legend.key = element_blank())+
+  scale_alpha(range=c(0.6,1))
+
+ggsave(plot = ysi_pcoa_plot, 
+       filename = file.path(ps_exp_path, "figures", "ysi_caribe_pcoa_plot.png"),       
+       dpi = 300, width = 6, height = 4)
+```
+

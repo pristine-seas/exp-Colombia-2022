@@ -1,0 +1,337 @@
+---
+title: "Process pelagic cams"
+author: 
+output:
+  word_document:
+    toc: no
+---
+
+```{r echo = FALSE, include = FALSE, warning = FALSE,prompt = FALSE, error = FALSE, strip.white = TRUE}
+knitr::opts_chunk$set(echo = FALSE, include = FALSE, warning = FALSE,
+                      prompt = FALSE, error = FALSE, strip.white = TRUE)
+
+knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
+
+options(dplyr.summarise.inform = FALSE)
+
+library(flextable)
+library(raster)
+library(sf)
+library(tidyverse)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+
+knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
+  set_flextable_defaults(
+  font.family = "Arial", font.size = 9, 
+  theme_fun = "theme_vanilla",
+  big.mark="", table.layout="autofit")
+  
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+pcam_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "pcam_meta.csv")) %>% 
+  filter(location == "Caribbean")
+
+pcam_taxa <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
+  filter(method == "pcam", location == "Caribbean")
+
+
+op_codes <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_2022_Pelagic_Fieldsheet_Seaflower 2022_05_17.xlsx"),
+                               sheet = "Meta") %>% 
+  select(op_code = OpCode, ps_station_id, sublocation = Sublocation, ps_sample_id)
+
+pcam_maxN <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_2022_Pelagic_Fieldsheet_Seaflower 2022_05_17.xlsx"),
+                               sheet = "MaxN Estimates") %>% 
+  janitor::clean_names() %>% 
+  pivot_longer(!op_code, names_to = "taxa", values_to = "MaxN") %>% 
+  mutate(taxa = str_to_sentence(str_replace_all(taxa, "_", " "))) %>% 
+  left_join(op_codes) %>% 
+  ungroup() %>% 
+  select(sublocation, ps_station_id, ps_sample_id, taxa, MaxN) 
+```
+
+```{r}
+pcam_summary_by_station <- pcam_maxN %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(max_N = max(MaxN)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, ps_station_id) %>% 
+  summarize(n_taxa = n_distinct(taxa[max_N > 0 ]),
+            abundance = sum(max_N)) %>% 
+  left_join(pcam_meta %>% 
+              group_by(ps_station_id) %>% 
+              summarize(lat = mean(lat_in, na.rm = T),
+                        lon = mean(lon_out, na.rm = T))) %>% 
+  ungroup()
+
+pcam_summary_by_taxa <- pcam_maxN %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(max_N = max(MaxN)) %>% 
+  ungroup() %>% 
+  group_by(sublocation) %>% 
+  mutate(n_stations = n_distinct(ps_station_id)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, taxa) %>% 
+  summarize(abundance = sum(max_N),
+            avg_maxN = round(mean(max_N),1),
+            max_maxN  = max(max_N),
+            f_obs = round(100*n_distinct(ps_station_id[max_N>0])/mean(n_stations))) %>% 
+  arrange(desc(f_obs)) %>% 
+  ungroup()
+```
+
+We deployed a total of `r n_distinct(pcam_meta$ps_station_id[pcam_meta$sublocation == "Bajo Nuevo"])` sets of  pelagic cameras in Bajo Nuevo and `r n_distinct(pcam_meta$ps_station_id[pcam_meta$sublocation == "Serranilla"])` in Serranilla. Each set was comprised of 5 paired camera rigs, separated 200 meters apart, and where left adrift for 2 hours at an approximate depth of 10 meters. In total, these cameras recorded the pelagic communities of Bajo Nuevo and Serranilla for `r n_distinct(pcam_meta$ps_station_id[pcam_meta$sublocation == "Bajo Nuevo"])*5*2` and `r n_distinct(pcam_meta$ps_station_id[pcam_meta$sublocation == "Serranilla"])*5*2` hours, respectively. 
+
+We observed a total of `r n_distinct(pcam_taxa$taxon)` distinct taxa belonging to `r n_distinct(pcam_taxa$family)` families. Barracuda (*Sphyraena barracuda*) were the most common species recorded at both locations, followed by large schools of scads (*Decapterus* sp.), and ocean triggerfish (*Canthidermis sufflamen*). Overall, five species of sharks were observed in the pelagic cameras but tiger shark (*Galeocerdo cuvier*), Caribbean sharpnose shark (*Rhizoprionodon porosus*), and great hammerhead (*Sphyrna mokarran*) were recorded only in Serranilla. Conversely, Spotted dolphins (*Stenella attennuata*) and driftfish (*Psenes* sp) were present in 11 and 56% of the cameras in Bajo Nuevo but were totally absent in Serranilla. Despite these noteworthy distinctions, we don't find statistically significant differences in total abundance, species richness, or community structure between Serranilla and Bajo Nuevo. 
+
+Spatial patterns of species richness and overall abundance suggest that the channel that crosses Bajo Nuevo (NW-SE) may be an important aggregator of pelagic predators. Here, recorded taxa included Spotted dolphins (*S. attennuata*), (*Carcharhinus perezii*), (*Carcharhinus falciformis*), and the single observation of (*Thunnus albacares*) of the entire expedition. 
+
+```{r include = TRUE, echo = F, comment= F}
+pcam_summary_by_taxa %>% 
+  pivot_longer(-c(sublocation, taxa)) %>% 
+  pivot_wider(names_from = c(sublocation, name), values_from = value) %>% 
+  left_join(pcam_taxa %>% 
+              select(taxa = taxon, family),
+            by = "taxa") %>% 
+  replace_na(list(family = "Carangidae")) %>% 
+  select(family, everything()) %>% 
+  arrange(family, taxa) %>% 
+  flextable() %>% 
+  set_header_labels(values = list(family = "Family", 
+                                  taxa = "Taxa", 
+                                  Serranilla_abundance = "Abundance",
+                                  `Bajo Nuevo_abundance` = "Abundance",
+                                  `Bajo Nuevo_avg_maxN` = "Mean max N",
+                                  `Serranilla_avg_maxN` = "Mean max N",
+                                  `Bajo Nuevo_max_maxN` = "Max N",
+                                  `Serranilla_max_maxN` = "Max N",
+                                  `Bajo Nuevo_f_obs` = "% Ocurrence",
+                                  `Serranilla_f_obs` = "% Ocurrence")) %>% 
+  flextable::add_header_row(values = c("", "", "Serranilla", "Bajo Nuevo"), 
+                            colwidths = c(1,1,4,4)) %>% 
+  merge_v(j = "family") %>% 
+  autofit(part = "all") %>%
+  align(align = "center", part = "all")
+```
+
+# Maps
+
+```{r, eval = F}
+caribe_sat_img <- terra::rast(file.path(ps_exp_path, 
+                               "data", "secondary", "raw", 
+                               "Allen atlas", "Coral-Reefs-2020-Visual-V1-Mosaic", "satellite_imagery_0.tif")) 
+
+bajos_eez <- bajos_eez %>% 
+  st_transform(crs(caribe_sat_img)) 
+  
+bn_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Bajo Nuevo Bank") %>% 
+                terra::ext(), mask = T) 
+
+serr_sat_img <- caribe_sat_img %>% 
+  terra::crop(bajos_eez %>% 
+                filter(territory1 == "Serranilla Bank") %>% 
+                terra::ext(), mask = T) 
+
+serr_map <- pcam_summary_by_station %>% 
+  filter(sublocation == "Serranilla") %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^7)+
+  geom_sf(aes(size = abundance, col = n_taxa))+
+  coord_sf(xlim = c(-79.9, -79.7), ylim = c(15.72, 15.9))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  viridis::scale_color_viridis()+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  theme(legend.position = "right",
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(serr_map,
+       filename = file.path(ps_exp_path, "figures", "pcam_serranilla_map.png"), 
+              height = 5, width = 6,
+       dpi = 300)
+
+bn_map <- pcam_summary_by_station %>% 
+  filter(sublocation == "Bajo Nuevo") %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  ggplot()+
+  tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^7)+
+  geom_sf(aes(size = abundance, col = n_taxa))+
+  coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
+  ggspatial::annotation_scale(location = "bl", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "white",
+                              text_col = "white",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = north_arrow_fancy_orienteering)+
+  viridis::scale_color_viridis()+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  theme(legend.position = "right",
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"), 
+        panel.background  = element_rect(fill ="#1b2b49"),
+        panel.grid = element_blank())
+
+ggsave(bn_map,
+       filename = file.path(ps_exp_path, "figures", "pcam_bajo_nuevo_map.png"), 
+       height = 4, width = 6,
+       dpi = 300)
+```
+
+# Stats
+
+## univariate
+
+```{r}
+pcam_summary_by_station %>% 
+  select(sublocation, n_taxa, abundance) %>% 
+  pivot_longer(!sublocation) %>% 
+  ggplot()+
+  geom_boxplot(aes(sublocation, value))+
+  facet_wrap("name", scales = "free")+
+  labs(x = "", y = "")
+```
+
+```{r}
+pcam_summary_by_station %>% 
+  rstatix::shapiro_test(n_taxa, abundance)
+```
+
+```{r}
+vegan::adonis2(pcam_summary_by_station %>% 
+          select(n_taxa) ~  sublocation, 
+        data = pcam_summary_by_station,
+        method = "euclidean")
+
+vegan::adonis2(pcam_summary_by_station %>% 
+          select(abundance) ~  sublocation, 
+        data = pcam_summary_by_station,
+        method = "euclidean")
+```
+
+## community 
+
+```{r}
+pcam_by_station_wide <- pcam_maxN %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(max_N = max(MaxN)) %>% 
+  ungroup() %>% 
+  pivot_wider(names_from = taxa, values_from = max_N) 
+
+max_n_dist <- pcam_by_station_wide %>% 
+  select(-sublocation) %>% 
+  column_to_rownames("ps_station_id") %>% 
+  vegan::avgdist(dmethod = "bray", sample = 1) 
+
+pcam_MDS <- vegan::metaMDS(max_n_dist, k = 2, trymax = 1000)
+
+pcam_MDS$stress
+
+pcam_MDS_spp_fit <- vegan::envfit(pcam_MDS, 
+                                  pcam_by_station_wide %>% 
+                                    select(-sublocation, -ps_station_id))
+
+pcam_MDS_spp_scores <- pcam_MDS_spp_fit %>% 
+  vegan::scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = pcam_MDS_spp_fit$vectors$r,
+         p = pcam_MDS_spp_fit$vectors$pvals) 
+
+n_ind_MDS_site_scores <- vegan::scores(pcam_MDS, display = "sites") %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  left_join(pcam_by_station_wide %>%
+              select(sublocation, ps_station_id))
+```
+
+```{r}
+ggplot() +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  geom_point(data = n_ind_MDS_site_scores,
+             aes(x = NMDS1, y = NMDS2, col = sublocation)) +
+  geom_segment(data = pcam_MDS_spp_scores %>% 
+                 filter(r > 0.3), 
+               aes(x = 0, y = 0, xend = NMDS1*1, yend = NMDS2*1, alpha = r), 
+               colour = "black", 
+               size = 0.2, 
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             type = 'open', ends = "last"))+
+  ggrepel::geom_text_repel(data = pcam_MDS_spp_scores %>% 
+                 filter(r > 0.3), 
+                           aes(x=NMDS1*1, y=NMDS2*1, label = ps_taxon_code, alpha = r),
+                           colour="black",
+                           show.legend = F) +
+  coord_fixed(ratio=1)+
+  ggforce::geom_mark_ellipse(data = n_ind_MDS_site_scores, 
+                             aes(x=NMDS1, y = NMDS2, colour = sublocation, 
+                                 fill=after_scale(alpha(colour, 0.01))), 
+                             expand=0, size=0.2, show.legend=FALSE)+
+  theme(panel.background = element_blank(),
+        panel.border = element_blank(),
+        panel.grid = element_blank(),
+        axis.line = element_line("gray25"),
+        text = element_text(size = 12, family = "Arial"),
+        axis.text = element_text(size = 10, colour = "gray25"),
+        axis.title = element_text(size = 12, colour = "gray25"),
+        legend.key = element_blank())+
+  scale_alpha(range=c(0.6,1))
+```
+
+```{r}
+pcam_adonis <- vegan::adonis2(max_n_dist ~ sublocation,
+        data = pcam_by_station_wide,
+        by = "margin")
+
+pcam_adonis
+```
+Species in the channel 
+
+```{r}
+pcam_maxN %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(max_N = max(MaxN)) %>% 
+  filter(ps_station_id %in% c("COL_pcam_31","COL_pcam_32", "COL_pcam_33", "COL_pcam_30")) %>% 
+  group_by(taxa) %>% 
+  summarize(max_n = max(max_N)) %>% 
+  arrange(desc(max_n))
+```
+
