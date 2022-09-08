@@ -48,7 +48,7 @@ bruvs_maxN <- bruvs_maxN %>%
                            taxon == "Rhizoprionodon sp." ~ "Rhizoprionodon",
                            taxon == "S. mokarran" ~ "Sphyrna mokarran",
                            taxon == "N. brevirostris" ~ "Negaprion brevirostris",
-                           taxon == "H. americanus" ~ "Homarus americanus",
+                           taxon == "H. americanus" ~ "Hypanus americanus",
                            taxon == "A. narinari" ~ "Aetobatus narinari",
                            taxon == "U. jamaicensis" ~ "Urobatis jamaicensis",
                            taxon == "P. percellens" ~ "Pseudobatos percellens",
@@ -145,7 +145,7 @@ bn_map <- bruvs_summary_by_station %>%
   viridis::scale_color_viridis()+
   scale_shape_manual(values= seq(100:110), name = "")+
   theme_light()+
-  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  labs(col = "# Taxones", shape = "", size = "MaxN total")+
   theme(legend.position = "right",
         legend.background = element_blank(),
         legend.key = element_blank(),

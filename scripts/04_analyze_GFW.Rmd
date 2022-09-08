@@ -596,10 +596,23 @@ seaflower_detects <- sar_detections %>%
         panel.background = element_blank(),
         legend.position = "bottom",
         legend.title.align = 0.5)+
-  labs(title = "Vessel detections",
-       subtitle = "2016-2020",
-       x = "", y = "")+
-  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)
+  # labs(title = "Vessel detections",
+  #      subtitle = "2016-2020",
+  #      x = "", y = "")+
+  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+  bbplot::bbc_style()+
+  ggspatial::annotation_scale(location = "br", 
+                              width_hint = 0.2, 
+                              style = "ticks", 
+                              line_col = "black",
+                              text_col = "black",
+                              pad_y = unit(0.01, units =  "native"), 
+                              pad_x = unit(0.01, units =  "native"))+
+  ggspatial::annotation_north_arrow(location = "tr", 
+                                    which_north = "true", 
+                                    height = unit(0.1, "native"), width = unit(0.1, "native"),
+                                    pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
+                                    style = ggspatial::north_arrow_fancy_orienteering)
 
 ggsave(seaflower_detects, filename = file.path(ps_exp_path, "figures", "gfw_sar_detects_seaflower.png"), 
        dpi = 300)

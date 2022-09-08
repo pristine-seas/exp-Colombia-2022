@@ -15,10 +15,10 @@ output:
 ```{r}
 library(raster)
 library(sf)
-library(tidyverse)
 library(ggspatial)
 library(lubridate)
 library(bdc)
+library(tidyverse)
 source("_prj_vars.R")
 load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
 ```
@@ -35,7 +35,8 @@ dscm_data <- read_csv(file.path(ps_exp_path,
                                 "dscm",
                                 "annotations",
                                 "COL_dscm_annotations.csv"), 
-                      trim_ws = T, skip_empty_rows = T)
+                      trim_ws = T, skip_empty_rows = T) %>% 
+  mutate(taxa = str_to_sentence(taxa))
 
 dscm_meta <- read_csv(file.path(ps_exp_path, "data", "primary", 
                                 "processed", "metadata" ,"dscm_meta.csv"))
@@ -47,6 +48,22 @@ dscm_taxa <- dscm_data %>%
   filter(!str_detect(taxa, "bottom|Plankton"), !is.na(taxa)) %>% 
   distinct(location = location, taxon = taxa) %>% 
   mutate(method = "dscm")
+```
+
+```{r}
+dscm_data_caribe <- read_csv(file.path(ps_exp_path, 
+                                       "data/primary/raw",
+                                       "dscm",
+                                       "annotations",
+                                       "SEA_dropcam_annotations_fish.csv"), 
+                             trim_ws = T, skip_empty_rows = T)
+
+dscm_taxa <- dscm_data_caribe %>%
+  filter(!is.na(taxa)) %>% 
+  left_join(dscm_meta %>% select(ps_station_id, location)) %>% 
+  distinct(location = location, taxon = taxa) %>% 
+  mutate(method = "dscm") %>% 
+  bind_rows(dscm_taxa)
 ```
 
 ## Meso
@@ -100,8 +117,9 @@ pcam_taxa_pacific <- pcam_taxa_pacific %>%
               str_extract_all("[A-z]+", simplify = T) %>% 
               as_tibble() %>% 
               unite(taxon, V1:V2, sep = " ", na.rm	= F) %>% 
-              mutate(taxon = str_to_lower(str_trim(str_squish(taxon)))) %>% 
-              select(taxon))
+              mutate(taxon = str_to_sentence(str_trim(str_squish(taxon)))) %>% 
+              select(taxon)) %>% 
+  distinct(method, location, taxon)
 ```
 
 ```{r}
@@ -136,7 +154,8 @@ birds_taxa <- birds_taxa %>%
             location = str_to_title(str_replace_all(name, "_" ," "))) %>% 
   mutate(location = if_else(location == "Tribuga", "Golfo de Tribuga", 
                           if_else(location == "Seaflower", "Caribbean", location))) %>% 
-  filter(!is.na(taxon))
+  filter(!is.na(taxon)) %>% 
+  distinct()
 ```
 
 ## Bruvs
@@ -159,7 +178,7 @@ bruvs_taxa <- bruvs_maxN %>%
                            taxon == "Rhizoprionodon sp." ~ "Rhizoprionodon",
                            taxon == "S. mokarran" ~ "Sphyrna mokarran",
                            taxon == "N. brevirostris" ~ "Negaprion brevirostris",
-                           taxon == "H. americanus" ~ "Homarus americanus",
+                           taxon == "H. americanus" ~ "Hypanus americanus",
                            taxon == "A. narinari" ~ "Aetobatus narinari",
                            taxon == "U. jamaicensis" ~ "Urobatis jamaicensis",
                            taxon == "P. percellens" ~ "Pseudobatos percellens",
@@ -187,15 +206,18 @@ navi_taxa <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
 
 bn_taxa <- readxl::read_xlsx(file.path(ps_exp_path, "data/primary/raw",
                                        "sub","files/bajo_nuevo_annotations.xlsx"),
-                             sheet = "observations") %>% 
+                             sheet = "fish obs") %>% 
   janitor::clean_names() %>% 
   filter(!is.na(taxa)) %>% 
+  distinct(taxon = taxa)
+
+bn_taxa <- bn_taxa %>% 
+  add_row(taxon = c("Serranus luciopercatus", "Symphysanodon octoactinus")) %>% 
   mutate(location = "Caribbean",
-         method = "sub") %>% 
-  distinct(location, method, taxon = taxa)
+         method = "sub")
 ```
 
-## UVC
+## UVS
 
 ### Fish
 
@@ -235,7 +257,12 @@ exp_fish_obs <- unique(c(exp_fish_obs_caribe$species, exp_fish_obs_pacific$speci
 
 fish_taxa_list <- fish_taxa_list %>% 
   filter(ps_taxon_code %in% exp_fish_obs) %>% 
-  mutate(method = "uvc")
+  mutate(method = "uvs")
+
+fish_taxa_list <- fish_taxa_list %>% 
+  mutate(taxon = if_else(stringr::str_count(taxon, boundary("word")) == 1, 
+                        paste(taxon, "sp."),
+                        taxon)) 
 ```
 
 ### Inverts
@@ -245,7 +272,6 @@ inverts_taxa_pacific <- readxl::read_excel(file.path(ps_exp_path,
                                         "data", "primary","raw","inverts","COL_contacts_fieldsheet.xlsx"), 
                                sheet = "All species") %>% 
   janitor::clean_names()
-
 
 inverts_taxa_caribe <- readxl::read_excel(file.path(ps_exp_path, 
                                         "data", "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
@@ -289,7 +315,7 @@ clean_master_taxa <- bdc::bdc_clean_names(master_taxa_list$taxon) %>%
   select(taxon = scientific_name, 
          taxon_clean = names_clean) %>% 
   mutate(taxon_clean = coalesce(taxon_clean, 
-                               taxadb::clean_names(taxon, lowercase = F))) %>% 
+                                taxadb::clean_names(taxon, lowercase = F))) %>% 
   distinct(taxon, taxon_clean) %>% 
   left_join(master_taxa_list)
 
@@ -320,6 +346,17 @@ clean_master_taxa$taxon_clean[clean_master_taxa$taxon == "Alopias superciliosus"
 
 clean_master_taxa %>% 
   filter(taxon!= taxon_clean) 
+
+clean_master_taxa$taxon_clean[clean_master_taxa$taxon == "Barracuda"] <- "Sphyraena barracuda"
+clean_master_taxa$taxon_clean[clean_master_taxa$taxon == "Strombus costatus"] <- "Macrostrombus costatus"
+clean_master_taxa$taxon_clean[clean_master_taxa$taxon == "Strombus raninus"] <- "Lobatus raninus"
+clean_master_taxa$taxon_clean[clean_master_taxa$taxon == "Strombus gallus"] <- "Aliger gallus"
+```
+
+```{r}
+clean_master_taxa %>% 
+  distinct(taxon_clean) %>% 
+  arrange(taxon_clean)
 ```
 
 # Worms match
@@ -333,7 +370,8 @@ clean_taxa_worms <- clean_master_taxa$taxon_clean %>%
   mutate(taxon_id = if_else(!is.na(valid_aphia_id),
                               paste0("WORMS:", valid_aphia_id),
                               NA_character_)) %>% 
-  select(scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority,
+  select(scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, 
+         taxon_authority = valid_authority,
          kingdom, phylum, class, order, family, genus) %>% 
   distinct() 
 ```
@@ -375,6 +413,8 @@ clean_taxa_gbif <- clean_taxa_gbif %>%
          taxon_authority = scientific_name_authorship, kingdom, phylum, class, order, family, genus) %>% 
   distinct()
 
+clean_taxa_gbif %>% 
+  filter(taxon_valid_name != original_search)
 # clean_taxa_gbif <- clean_taxa_gbif %>% 
 #   filter(!is.na(taxon_id)) %>% 
 #   mutate(taxon_id = gsub("^.{0,5}", "", taxon_id))
@@ -395,20 +435,25 @@ clean_master_taxa <- clean_master_taxa %>%
 
 clean_master_taxa <- clean_master_taxa %>% 
   coalesce_join(clean_taxa_gbif %>% 
-                  select(taxon_clean = original_search, gbif_sci_name = taxon_valid_name,
+                  select(taxon_clean = original_search, 
+                         gbif_sci_name = taxon_valid_name,
                          taxon_rank, 
                          taxon_id,
                          taxon_authority,
                          kingdom, phylum, class, order, family, genus) %>%
-                  distinct(), by = "taxon_clean") 
+                  distinct(), 
+                by = "taxon_clean") 
 
 clean_master_taxa %>% 
-  filter(worms_sci_name != gbif_sci_name | is.na(worms_sci_name)) %>% 
-  distinct(taxon, gbif_sci_name,worms_sci_name, taxon_clean)
+  filter(worms_sci_name != gbif_sci_name | is.na(worms_sci_name), method == "birds")
 
 clean_master_taxa %>% 
   filter(is.na(worms_sci_name), is.na(gbif_sci_name))
+
+clean_master_taxa <- clean_master_taxa %>% 
+  filter(!taxon %in% c("Cca", "Thalobata sp")) 
 ```
+
 # Merge sources
 
 ```{r}
@@ -433,8 +478,6 @@ clean_master_taxa <- clean_master_taxa %>%
                             c(vme_ind$valid_aphia_id, all_vme_taxa$valid_AphiaID), T, F)) 
 
 clean_master_taxa %>% filter(is_vme)
-
-clean_master_taxa <- read_csv("temp.csv")
 ```
 
 # IUCN
@@ -484,9 +527,11 @@ clean_master_taxa <- clean_master_taxa %>%
              by = c("taxon_sci_name"="species")) 
 
 clean_master_taxa %>% 
-  filter(is.na(a) & taxon_rank == "Species", class %in% c("Actinopteri", "Actinopterygii", "Elasmobranchii")) %>% 
+  filter(is.na(a) & taxon_rank == "Species", 
+         class %in% c("Actinopteri", "Actinopterygii", "Elasmobranchii")) %>% 
   distinct()
 ```
+
 ```{r}
 fish_missing_lw_params <- tribble(~taxon_sci_name, ~a, ~b, ~troph, ~max_length_tl,
                                   "Carcharhinus perezi", 0.00490, 3.08, 4.5, 300,
@@ -501,6 +546,7 @@ clean_master_taxa %>%
   filter(method == "uvc",is.na(a) & class %in% c("Actinopteri", "Actinopterygii", "Elasmobranchii")) %>% 
   distinct(taxon_sci_name)
 ```
+
 ```{r}
 impute.mean <- function(x) replace(x, is.na(x), mean(x, na.rm = TRUE))
 
@@ -508,7 +554,10 @@ clean_master_taxa <- clean_master_taxa %>%
   group_by(genus) %>% 
   mutate_at(vars(a, b, troph, max_length_tl), .funs =  impute.mean) %>% 
   mutate_all(~ifelse(is.nan(.), NA, .)) %>% 
-  mutate(method_ab = if_else(is.na(method_ab) & !is.na(a), "Imputed at genus level", method_ab)) 
+  mutate(method_ab = if_else(is.na(method_ab) & !is.na(a), 
+                             "Imputed at genus level", 
+                             method_ab)) %>% 
+  ungroup()
 ```
 
 # Common names
@@ -532,12 +581,48 @@ worms_common_names <- worms_common_names %>%
 worms_common_names$id <- paste0("WORMS:", worms_common_names$id)
 
 clean_master_taxa <- clean_master_taxa %>% 
-  left_join(worms_common_names, by = c("taxon_id"="id"))
+  left_join(worms_common_names, by = c("taxon_id" = "id"))
 
-clean_master_taxa %>% 
-  arrange(taxon_sci_name) %>% 
-  write_csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv"))
+clean_master_taxa <- clean_master_taxa %>% 
+  ungroup() %>% 
+  mutate(method = if_else(method == "uvc", "uvs", method)) %>% 
+  arrange(taxon_sci_name) 
+
+clean_master_taxa %>%   
+write_csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv"))
 ```
 
+```{r}
+clean_master_taxa %>% 
+  filter(location == "Caribbean") %>% 
+  distinct(taxon_sci_name, taxon_rank, taxon_id, taxon_authority, kingdom, phylum, class, order, family, genus, is_vme, iucn_redlist_cat, iucn_trend) %>% 
+  write_csv(file.path(ps_exp_path, "reports/Caribe/Anexos", "Tabla_S2_listado_de_especies.csv"))
+```
+
+# New records for the Caribbean
+
+```{r}
+c("Chilomycterus antillarum",
+  "Amphichthys",
+  "Prognathodes guyanensis", 
+  "Liopropoma aberrans",
+  "Gonioplectrus hispanus",
+  "Serranus luciopercanus",
+  "Sphyraena borealis",
+  "Lutjanus campechanus",
+  "Galeus springeri",
+  "Alopias superciliosus",
+  "Symphysanodon octoactinus") %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(taxon_id = if_else(!is.na(valid_aphia_id),
+                            paste0("WORMS:", valid_aphia_id),
+                            NA_character_)) %>% 
+  select(class, order, family, genus, taxon_sci_name = valid_name) %>% 
+  distinct() %>% 
+  arrange(class, order) %>% 
+  write_csv("new_records.csv")
+```
 
 

@@ -26,7 +26,7 @@ uvc_meta <- read_csv(file.path(ps_exp_path,
 
 uvc_taxa <- read_csv(file.path(ps_exp_path, 
                                "data", "primary", "processed", "taxa", "clean_master_taxa.csv")) %>% 
-  filter(method == "uvc", location == "Caribbean")
+  filter(method == "uvs", location == "Caribbean")
 
 inverts_lut <- readxl::read_excel(file.path(ps_exp_path, 
                                         "data", "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
@@ -194,6 +194,9 @@ p_cover_by_station <- p_cover_by_transect %>%
   summarize(p_cover = mean(p_cover)) %>% 
   ungroup()
 
+p_cover_by_station %>% 
+    write_csv(file.path(ps_exp_path, "reports/Caribe/Anexos", "Tabla_S5_porcentajes_cobertura_bentónica_por_estación.csv"))
+
 p_cover_by_habitat <- p_cover_by_station %>% 
   group_by(sublocation, habitat, functional_group, taxon, taxon_sci_name ) %>% 
   summarize(pcover = round(mean(p_cover, na.rm = T), 2)) %>% 
@@ -229,6 +232,24 @@ p_cover_by_habitat_fg <- p_cover_by_station_fg %>%
                                       "deep platform", "seagrass beds")))
 ```
 
+```{r}
+p_cover_by_transect %>%
+  filter(!habitat %in% c("deep platform", "seagrass beds"),
+         functional_group %in% c("Hard coral")) %>%
+  group_by(sublocation, ps_station_id, depth_m) %>%
+  summarize(p_cover = sum(p_cover)) %>%
+  group_by(sublocation) %>%
+  summarize(mean(p_cover),
+            max(p_cover))
+
+p_cover_by_transect_fg %>% 
+  filter(!habitat %in% c("deep platform", "seagrass beds"),
+         functional_group %in% c("Hard coral")) %>% 
+  group_by(sublocation) %>%
+  summarize(mean(p_cover),
+            max(p_cover))
+```
+
 Turf algae was the dominant benthic group covering the forereefs and lagoon patch reefs of Bajo Nuevo. On average, turf algae covered 27% and 26% of these habitats, respectively. Specifically, *Canistrocarpus cervicornis* is the most prevalent taxa in the majority of transects and on average covers over 18% of the forereefs and 15% of the patch reefs. After *C. cervicornis*,  *Lobophora sp.* and *Symplocastrum coccineum* are the most prevalent taxa with an average percent cover of 5% and 1.2%, respectively. In Bajo Nuevo's forereefs, erect algae are the second most dominant benthic group covering an average of 22.6% of the substrate. The most predominant taxa of erect algae in this habitat include *Dictyota menstrualis*, *Sargassum hystrix*, and *Halimeda tuna* covering an average of 6.1%, 6.1% and 5.3% of the benthos. In the lagoon patch reefs, erect algae cover is just under 10% of the substrate. Instead, hard coral follows turf algae in terms of percent cover with an average of 25.2% and reaching over 30% in several sites. Here, the most prevalent species were the mountainous star coral (*Orbicella faveolata*), boulder star coral (*Orbicella franksi*), and Caribbean star coral (*Orbicella annularis*) covering 6.6%, 5.4%, and 5.2% of the benthos, respectively. These species were observed in 100% of the transects in Bajo Nuevo's lagoon patch reefs and in some sites cover was as high as 16%. The high prevalence of these species in Bajo Nuevo is important to highlight because *O. annularis* and *O. faveolata* are classified as endangered, and *O. franksi* as vulnerable, by the IUCN. The forereefs of Bajo Nuevo also have relatively high cover of hard coral with an average of 15% and a maximum of 20% in some sites. However, the most prevalent taxa are different and include *Porites astreoides* and *Porites porites* with average cover of 4.5% and 3.5%, respectively. These species were observed in 100% of the sites and *Porites astreoides* covered up to 14% of the substrate in some sites. Although not widespread, the critically endangered species *Acropora cervicornis* was observed in 100% and 33% of the surveys in the path reefs and forereefs of Bajo Nuevo, respectively. Similarly, the critically endangered species  *Acropora palmata* was observed in 20% of the surveys in the lagoon patch reefs. In total, we recorded 25 distinct species of hard coral in the forereef and lagoon patch reefs of Bajo Nuevo. Benthic cover in the deep plateau was different from the other two habitats surveyed in Bajo Nuevo. Here, encrusting non-calcareous algae (*Lobophora* sp.) covered 45% of the substrate followed by the erect algae (18.4%). Of the latter benthic group, *Sargassum hystrix*, *Stypopodium zonale*, and *Halimeda opuntia* were the most common taxa covering 6.4%, 4.8%, and 4.4% of the substrate, respectively. In this habitat we recorded the highest benthic cover of soft corals (5.6%) compared to lagoon patch reefs (3.8%) and forereef (2.7%). A total of 13 species of soft coral were observed in Bajo Nuevo with the highest benthic cover attributed to *Plexaura* sp (2%), *Antillogorgia americana* (1.2%), and *Palythoa caribaeorum* (1.2%) in the deep plateau, and to *Briareum asbestinum* (1.2%) and *Muriceopsis flavida* (1.1%) in the lagoon patch reefs. 
 
 In Serranilla, turf algae was the dominant group covering the substrate of the forereef (35.9%) and the island fringing reef (38.5%) and the second most prevalent group in the lagoon patch reefs (24%). As in Bajo Nuevo, *C. cervicornis* was the most common taxa of turf, followed by *Cladophoropsis membranacea* (6.9%) in the forereef and *Caulerpa verticillata* (2.8%) in the lagoon patch reef. 
@@ -239,11 +260,34 @@ Hard coral cover in Serranilla is significantly lower than in Bajo Nuevo (R2 = 0
 
 Compared to Bajo Nuevo, hard coral cover was considerably lower in Serranilla with average cover of 12.2%, 9.5%, and 7.4% of the substrate in the forereef, patch reefs, and fringing reefs. Total number of species was also lower (19). *P. astreoides* and *S. siderea* were the dominant hard corals with an average cover of 5.2% and 2.4% in the forereefs, and 2.6% and 2.4% in the fringing reefs, respectively. In stark contrast to Bajo Nuevo, the average cover of the endangered species *O. annularis* and *O. faveolata* was less than 1%. Additionally, *A. cervicornis* was absent in Serranilla, and *A. palmata* was seen in 100% of station but with very low contributions to benthic cover (<0.1%). In terms of soft corals, the total number of species was lower than in Bajo Nuevo (8) and benthic cover was comparable with 4.5%, 2.2%, and 2% of the subtrate in the lagoon patch reef, fringing reef, and forereef respectively. In Serranilla, *Gorgonia flabellum* was considerably more prevalent than it was in Bajo Nuevo on both the patch reefs (1.5%) and fringing reefs (0.7%). Lastly, the seagrass habitat of Serranilla was clearly dominated by a single species (*Syringodium filiforme*) covering 74% of the substrate. Erect algae were interspersed with *S. filiforme* and covered 18% of the habitat. The most prevalent taxa include *Halimeda incrassata* (4%), *Avrainvillea longicaulis* (3%), *Penicillus capitatus* (3%) and *Penicillus dumetosus* (2%).
 
+
+```{r}
+p_cover_by_habitat_fg <- p_cover_by_habitat_fg %>% 
+  mutate(habitat_spanish = case_when(habitat == "seagrass beds" ~ "Pastos marinos",
+                                     habitat == "deep platform" ~ "Meseta profunda",
+                                     habitat == "lagoon patch reef" ~ "Arrecife lagunar",
+                                     habitat == "island fringing reef" ~ "Arrecife periferico",
+                                     habitat == "forereef" ~ "Arrecife frontal"),
+         functional_group_spanish = case_when(functional_group == "Seagrass" ~ "Pastos marinos",
+                                              functional_group == "Encrusting non-calcareous algae" ~ "Alga encrustante no calcarea",
+                                              functional_group == "Erect algae" ~ "Alga erecta",
+                                              functional_group == "Turf" ~ "Cesped de alga",
+                                              functional_group == "Hard coral" ~ "Coral duro",
+                                              functional_group == "Barren" ~ "Arido",
+                                              functional_group == "Sediment" ~ "Sedimento",
+                                              functional_group == "Erect invertebrate" ~ "Invertebrado erecto",
+                                              functional_group == "Encrusting calcareous algae" ~ "Alga calcarea incrustante",
+                                              functional_group == "Soft coral" ~ "Coral blando",
+                                              functional_group == "Boring invertebrate" ~ "Invertebrado perforador",
+                                              functional_group == "Encrusting invertebrate" ~ "Invertebrado incrustante",
+                                              )) 
+```
+
 ```{r}
 p_cover_plot <- p_cover_by_habitat_fg %>% 
   ggplot()+
-  geom_col(aes(x = fct_rev(fct_infreq(habitat)), y = pcover, 
-               fill = fct_reorder(functional_group, pcover)), col = "black", size = 0.1)+
+  geom_col(aes(x = fct_rev(fct_infreq(habitat_spanish)), y = pcover, 
+               fill = fct_reorder(functional_group_spanish, pcover)), col = "black", size = 0.1)+
   facet_wrap("sublocation")+
   coord_flip()+
   scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(20))+
@@ -253,7 +297,7 @@ p_cover_plot <- p_cover_by_habitat_fg %>%
   guides(fill = guide_legend(nrow=5,byrow=TRUE))
 
 ggsave(p_cover_plot, 
-       filename = file.path(ps_exp_path, "figures", "uvc_caribe_p_cover_plot.png"),
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_p_cover_plot_spanish.png"),
        dpi = 300, width = 12, height = 10)
 ```
 
@@ -316,6 +360,7 @@ ggsave(caribe_sessile_inverts_diversity_treemap,
 ```
 
 # hard coral cover maps
+
 ```{r, eval = F}
 serr_map <- p_cover_by_station_fg %>% 
   filter(functional_group == "Hard coral") %>% 
@@ -339,22 +384,23 @@ serr_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",
+                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar", "pastos marinos"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
-  labs(col = "Habitat", size = "% cover")+
+  labs(col = "Hábitat", size = "% Cobertura")+
   theme(legend.background = element_blank(),
-        legend.position = "bottom",
-        legend.box = 'vertical',
-        legend.justification = 'left',
-        legend.box.just = 'left',
+        legend.position = "right",
+        # legend.box = 'vertical',
+        # legend.justification = 'left',
+        # legend.box.just = 'left',
         legend.key = element_blank(),
         legend.text = element_text(colour = "black"), 
         panel.background  = element_rect(fill ="#1b2b49"),
         panel.grid = element_blank())
 
 ggsave(serr_map,
-       filename = file.path(ps_exp_path, "figures", "serranilla_hard_coral_cover_map.png"), 
+       filename = file.path(ps_exp_path, "figures", "serranilla_hard_coral_cover_map_spanish.png"), 
        dpi = 300)
 ```
 
@@ -381,29 +427,27 @@ bn_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",
+                                     labels = c("meseta profunda", "arrecife frontal", "arrecife lagunar"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
-  labs(col = "Habitat", size = "% cover")+
+  labs(col = "Hábitat", size = "% Cobertura")+
   theme(legend.background = element_blank(),
-        legend.position = "bottom",
-        legend.box = 'vertical',
-        legend.justification = 'left',
-        legend.box.just = 'left',
+        legend.position = "right",
+        # legend.box = 'vertical',
+        # legend.justification = 'left',
+        # legend.box.just = 'left',
         legend.key = element_blank(),
         legend.text = element_text(colour = "black"), 
         panel.background  = element_rect(fill ="#1b2b49"),
         panel.grid = element_blank())
 
 ggsave(bn_map,
-       filename = file.path(ps_exp_path, "figures", "bajo_nuevo_hard_coral_cover_map.png"), 
+       filename = file.path(ps_exp_path, "figures", "bajo_nuevo_hard_coral_cover_map_spanish.png"), 
        dpi = 300, height = 5, width = 6.5)
 ```
 
-
-
-
-In addition to the standardized point contact transects, we prospected around each site and recorded the presence of all hard corals. Seven additional taxa were observed outside the transects including *Stylaster roseus*,  *Mycetophyllia lamarckiana*, and *Favia fragum*. 
+In addition to the standardized point contact transects, we prospected around each site and recorded the presence of all hard corals. Seven additional taxa were observed outside the transects including *Stylaster roseus*,  *Mycetophyllia lamarckiana*, and *Favia fragum*.
 
 ```{r include = T, echo = F}
 hard_coral_presence_long %>% 
@@ -563,13 +607,20 @@ community_pcoa_plots <- map(c("habitat", "sublocation"),
       paletteer::scale_color_paletteer_d("ggsci::default_jama")
 )
 
-community_pcoa_plots[[2]] %>% 
-  ggsave(filename = file.path(ps_exp_path, "figures", "uvc_caribe_pcover_pcoa.png"), 
-       dpi = 300, width = 8, height = 6)
+pcoa_by_atoll <- community_pcoa_plots[[2]] 
 
-community_pcoa_plots[[1]] %>% 
-  ggsave(filename = file.path(ps_exp_path, "figures", "uvc_caribe_pcover_pcoa_by_hab.png"), 
-       dpi = 300, width = 8, height = 6)
+pcoa_by_hab <- community_pcoa_plots[[1]]+
+    labs(color = "Habitat") + 
+  paletteer::scale_color_paletteer_d("ggsci::default_jama", 
+                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar")) 
+
+library(patchwork)
+
+pcoa_plots <- pcoa_by_atoll/pcoa_by_hab 
+  
+ggsave(pcoa_plots, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_pcoa_plots_spanish.png"), 
+       dpi = 300, width = 8, height = 10)
 ```
 
 ```{r, eval = F}
@@ -618,6 +669,18 @@ n_ind_vagile_long <- n_ind_vagile_meta %>%
 n_ind_vagile_long <- n_ind_vagile_long %>% 
   left_join(uvc_taxa %>% 
               select(taxon, taxon_sci_name, family))
+
+n_ind_vagile_long <- n_ind_vagile_long %>% 
+   mutate(habitat_spanish = case_when(habitat == "seagrass beds" ~ "Pastos marinos",
+                                     habitat == "deep platform" ~ "Meseta profunda",
+                                     habitat == "lagoon patch reef" ~ "Arrecife lagunar",
+                                     habitat == "island fringing reef" ~ "Arrecife periferico",
+                                     habitat == "forereef" ~ "Arrecife frontal"))
+
+n_ind_vagile_long %>% 
+  ungroup() %>% 
+  select(sublocation, habitat, ps_station_id, taxon_sci_name, family, n_ind) %>% 
+      write_csv(file.path(ps_exp_path, "reports/Caribe/Anexos", "Tabla_S5_abundancia_invert_vagiles_por_estación.csv"))
 ```
 
 We surveyed 100 m2 in each station in search for vagile invertebrates. In total, we recorded `r n_distinct(n_ind_vagile_long$taxon)` distinct taxa belonging to `r n_distinct(n_ind_vagile_long$family)` families. Number of species was highest in the lagoon patch reef and forereefs of Bajo Nuevo with 12 and 10 taxa, respectively. The average number of individuals per stations was also highest in these habitats but overall abundances were low: 0.67 and 0.33 in the patch reefs and forereefs, respectively. In Serranilla, the most number of taxa was found in the fringing reefs (8) and lagoon patch reefs (5). 
@@ -625,26 +688,26 @@ We surveyed 100 m2 in each station in search for vagile invertebrates. In total,
 Overall, the most abundant taxa is the sea snail *Cerithium litteratum*, observed in 20% of the stations in the patch reefs in Bajo Nuevo with average abundance of 10 individuals per station. The  Caribbean spiny lobster (*Panulirus argus*) is the second most abundant taxa with 2.5 and 1.1 individuals per station in the patch reefs and fringing reefs of Serranilla, respectively. *P. argus* was recorded in 56% of the stations in Serranilla and in less than 10% of the stations in Bajo Nuevo. Other commonly observed taxa include *Strombus gallus*, *Diadema antillarum*, *Echinometra viridis*,  *Haliger gigas*, and *Stenopus hispidus*; all observed in more than a third of the stations in Bajo Nuevo. 
 
 ```{r}
-var_labs <- c("Individuals per station", "Number of taxa")
+var_labs <- c("Individuos por estación", "Número de taxones")
 
 names(var_labs) <- c("mean_n", "n_taxa")
 
 vagila_barplot <- n_ind_vagile_long %>% 
-  group_by(sublocation, habitat) %>% 
+  group_by(sublocation, habitat_spanish) %>% 
   summarize(n_taxa = n_distinct(taxon[n_ind > 0]),
             mean_n = round(mean(n_ind), 2)) %>% 
   arrange(desc(mean_n)) %>% 
-  pivot_longer(-c(sublocation, habitat)) %>% 
+  pivot_longer(-c(sublocation, habitat_spanish)) %>% 
   ggplot()+
-  geom_col(aes(x = sublocation, y = value, fill = habitat), position = "dodge")+
+  geom_col(aes(x = sublocation, y = value, fill = fct_reorder(habitat_spanish, value)), position = "dodge")+
   facet_wrap("name", scale = "free", labeller = labeller(name = var_labs))+
   bbplot::bbc_style()+
   paletteer::scale_fill_paletteer_d("rcartocolor::Antique", direction = 1)+
   theme(legend.position = "bottom")
 
 ggsave(vagila_barplot, 
-       filename = file.path(ps_exp_path, "figures", "uvc_caribe_vagile_barplot.png"), 
-       dpi = 300, width = 11, height = 6)
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_vagile_barplot_spanish.png"), 
+       dpi = 300, width = 12, height = 7)
 ```
 
 ```{r, include = T, echo = F}
@@ -669,24 +732,5 @@ n_ind_vagile_long %>%
   flextable::align(align = "center", part = "all")
 ```
 
-# Anexes
-
-```{r include = T, echo = F}
-uvc_meta %>% 
-  mutate_if(is.numeric, round, 3) %>% 
-  select(location = sublocation, habitat, date, depth_m, time = local_time, lat, lon, ps_station_id) %>%
-  write_csv(file.path(ps_exp_path, 
-                               "data", "primary", "processed", "caribe_report_annex", "uvc_meta.csv"))
-```
-
-
-```{r, include = T, echo = F}
-uvc_taxa %>%
-  select(phylum, class, order, family, genus, taxon_sci_name) %>% 
-  arrange(phylum, class, order, family, genus) %>% 
-  distinct() %>% 
-  write_csv(file.path(ps_exp_path, 
-                               "data", "primary", "processed", "caribe_report_annex", "uvc_taxa.csv"))
-```
 
 

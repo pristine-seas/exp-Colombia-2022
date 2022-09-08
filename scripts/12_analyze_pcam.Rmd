@@ -17,10 +17,10 @@ options(dplyr.summarise.inform = FALSE)
 library(flextable)
 library(raster)
 library(sf)
-library(tidyverse)
 library(ggspatial)
 library(lubridate)
 library(bdc)
+library(tidyverse)
 source("_prj_vars.R")
 
 knitr::opts_chunk$set(echo = TRUE, fig.cap = TRUE)
@@ -165,7 +165,7 @@ serr_map <- pcam_summary_by_station %>%
   viridis::scale_color_viridis()+
   scale_shape_manual(values= seq(100:110), name = "")+
   theme_light()+
-  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  labs(col = "# Taxones", shape = "", size = "MaxN total")+
   theme(legend.position = "right",
         legend.background = element_blank(),
         legend.key = element_blank(),
@@ -201,7 +201,7 @@ bn_map <- pcam_summary_by_station %>%
   viridis::scale_color_viridis()+
   scale_shape_manual(values= seq(100:110), name = "")+
   theme_light()+
-  labs(col = "# Taxa", shape = "", size = "Total max N")+
+  labs(col = "# Taxones", shape = "", size = "Max N total")+
   theme(legend.position = "right",
         legend.background = element_blank(),
         legend.key = element_blank(),
