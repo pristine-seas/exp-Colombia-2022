@@ -433,81 +433,97 @@ ggsave(caribe_fish_diversity_treemap_SP,
 ## Acc curves
 
 ```{r}
-fish_data_by_transect_wide <- fish_data_by_transect %>%
-   dplyr::select(sublocation, transect_id, habitat, ps_taxon_code, n_ind) %>%
-  mutate(n_ind = if_else(n_ind > 0, 1, 0)) %>% 
-   pivot_wider(names_from = ps_taxon_code, values_from = n_ind, values_fill = 0)
-  
-acc_curves <- BiodiversityR::accumcomp(fish_data_by_transect_wide %>% 
-                                         select(-sublocation, -transect_id, -habitat),
-                                       y = fish_data_by_transect_wide %>% 
-                                         select(sublocation, habitat),
-                                       factor='sublocation', 
-                                       method='exact', conditioned = FALSE, plotit = FALSE) %>% 
-  BiodiversityR::accumcomp.long(ci = NA, label.freq = 4)
+library(iNEXT)
 
-bajo_nuevo_acc_curves <- BiodiversityR::accumcomp(fish_data_by_transect_wide %>% 
-                                                    filter(sublocation == "Bajo Nuevo") %>% 
-                                                    select(-sublocation, -transect_id, -habitat),
-                                                  y = fish_data_by_transect_wide %>% 
-                                                    filter(sublocation == "Bajo Nuevo") %>% 
-                                                    select(sublocation, habitat),
-                                                  factor='habitat', 
-                                                  method='exact', conditioned = FALSE, plotit = FALSE) %>% 
-  BiodiversityR::accumcomp.long(ci = NA, label.freq = 4)
+acc_data_by_atoll <- fish_data_by_transect %>%
+  mutate(presence = as.integer(if_else(n_ind == 0, 0, 1))) %>% 
+  select(sublocation, transect_id, taxon_sci_name, presence) %>% 
+  pivot_wider(names_from = transect_id, 
+              values_from = presence, values_fill = 0) %>% 
+  group_by(sublocation) %>% 
+  group_split(keep = FALSE)  %>% 
+  set_names(c("Bajo Nuevo", "Serranilla")) %>% 
+  map(.f = ~column_to_rownames(.x, "taxon_sci_name")) %>% 
+  map(.f = ~select_if(.x, ~ !is.numeric(.) || sum(.) != 0))%>% 
+  map(.f = ~filter(.x, rowSums(.x)>0))
 
-serranilla_acc_curves <- BiodiversityR::accumcomp(fish_data_by_transect_wide %>% 
-                                                    filter(sublocation == "Serranilla") %>% 
-                                                    select(-sublocation, -transect_id, -habitat),
-                                                  y = fish_data_by_transect_wide %>% 
-                                                    filter(sublocation == "Serranilla") %>% 
-                                                    select(sublocation, habitat),
-                                                  factor='habitat', 
-                                                  method='exact', conditioned = FALSE, plotit = FALSE) %>% 
-  BiodiversityR::accumcomp.long(ci = NA, label.freq = 4)
+ac_curve_by_atoll <- iNEXT(acc_data_by_atoll, q = 0,  datatype = "incidence_raw",endpoint = 150)
+
+accum_curve_by_atoll <- ggiNEXT(ac_curve_by_atoll)+
+  labs(x = "", y = "")+
+  theme(legend.position = "right")+
+  guides(linetype = "none")+
+  scale_color_manual(values = c("#C59B76", "#78BC61"))+
+  scale_fill_manual(values = c("#C59B76", "#78BC61"))
 ```
 
 ```{r}
-acc_curve_by_location <- acc_curves %>% 
-  ggplot(aes(x = Sites, y = Richness, ymax = UPR, ymin = LWR)) + 
-  scale_x_continuous(expand=c(0, 1), sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  geom_line(aes(colour=Grouping), size=2) +
-  geom_point(data=subset(acc_curves, labelit==TRUE), 
-             aes(colour=Grouping, shape=Grouping), size=5) +
-  geom_ribbon(aes(colour=Grouping), alpha=0.2, show.legend=FALSE)+
-  bbplot::bbc_style()+
-  paletteer::scale_color_paletteer_d("ggsci::default_jama")+
-  theme(axis.title = ggplot2::element_text(family = "Helvetica", size = 18, color = "#222222"))+
-  labs(x = "Numero de transectos", y = "Diversidad de especies", colour = "", shape = "")
+acc_data_by_habitat_serr <- fish_data_by_transect %>%
+  mutate(presence = as.integer(if_else(n_ind == 0, 0, 1))) %>% 
+  filter(sublocation == "Serranilla") %>% 
+  select(habitat, transect_id, taxon_sci_name, presence) %>% 
+  pivot_wider(names_from = transect_id, 
+              values_from = presence, values_fill = 0) %>% 
+  group_by(habitat) %>% 
+  group_split(keep = F)  %>% 
+  set_names(c("A. frontal", "A. periferico", "A. lagunar", "pastos")) %>% 
+  map(.f = ~column_to_rownames(.x, "taxon_sci_name")) %>% 
+  map(.f = ~select_if(.x, ~ !is.numeric(.) || sum(.) != 0))%>% 
+  map(.f = ~filter(.x, rowSums(.x)>0))
 
-acc_curve_serranilla <- serranilla_acc_curves %>% 
-  ggplot(aes(x = Sites, y = Richness, ymax = UPR, ymin = LWR)) + 
-  scale_x_continuous(expand=c(0, 1), sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  geom_line(aes(colour=Grouping), size=2) +
-  geom_point(data=subset(serranilla_acc_curves, labelit==TRUE), 
-             aes(colour=Grouping, shape=Grouping), size=5) +
-  geom_ribbon(aes(colour=Grouping), alpha=0.2, show.legend=FALSE)+
-  bbplot::bbc_style()+
-  paletteer::scale_color_paletteer_d("ggsci::default_jama")+
-  theme(axis.title = ggplot2::element_text(family = "Helvetica", size = 18, color = "#222222"))+
-  labs(x = "Numero de transectos", y = "Diversidad de especies", colour = "", shape = "")
+ac_curve_by_hab_serra <- iNEXT(acc_data_by_habitat_serr[1:3], q = 0, 
+                               datatype = "incidence_raw", endpoint =100, se = T)
 
-acc_curve_bajo_nuevo <- bajo_nuevo_acc_curves %>% 
-  ggplot(aes(x = Sites, y = Richness, ymax = UPR, ymin = LWR)) + 
-  scale_x_continuous(expand=c(0, 1), sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
-  geom_line(aes(colour=Grouping), size=2) +
-  geom_point(data=subset(bajo_nuevo_acc_curves, labelit==TRUE), 
-             aes(colour=Grouping, shape=Grouping), size=5) +
-  geom_ribbon(aes(colour=Grouping), alpha=0.2, show.legend=FALSE)+
-  bbplot::bbc_style()+
-  paletteer::scale_color_paletteer_d("ggsci::default_jama")+
-  theme(axis.title = ggplot2::element_text(family = "Helvetica", size = 18, color = "#222222"))+
-  labs(x = "Numero de transectos", y = "Diversidad de especies", colour = "", shape = "")
+accum_curve_serra <- ggiNEXT(ac_curve_by_hab_serra)+
+  labs(x = "", y = "Diversidad de especies")+
+  theme(legend.position = "right")+
+  guides(linetype = "none")+
+  PristineSeasR::scale_color_pristine_seas()+
+  PristineSeasR::scale_fill_pristine_seas()+
+  ggtitle('Serranilla')
 ```
 
+```{r}
+acc_data_by_habitat_bn <- fish_data_by_transect %>%
+  mutate(presence = as.integer(if_else(n_ind == 0, 0, 1))) %>% 
+  filter(sublocation == "Bajo Nuevo") %>% 
+  select(habitat, transect_id, taxon_sci_name, presence) %>% 
+  pivot_wider(names_from = transect_id, 
+              values_from = presence, values_fill = 0) %>% 
+  group_by(habitat) %>% 
+  group_split(keep = F)  %>% 
+  set_names(c("M. profunda", "A. frontal", "A. lagunar")) %>% 
+  map(.f = ~column_to_rownames(.x, "taxon_sci_name")) %>% 
+  map(.f = ~select_if(.x, ~ !is.numeric(.) || sum(.) != 0)) %>% 
+  map(.f = ~filter(.x, rowSums(.x)>0))
+
+ac_curve_by_hab_bn <- iNEXT(acc_data_by_habitat_bn, q = 0, 
+                               datatype = "incidence_raw", endpoint = 100,  se = T)
+
+accum_curve_bn <- ggiNEXT(ac_curve_by_hab_bn)+
+  labs(x = "Número of transectos", y = "")+
+  theme(legend.position = "right")+
+  guides(linetype = "none")+
+  PristineSeasR::scale_color_pristine_seas()+
+  PristineSeasR::scale_fill_pristine_seas() +
+  ggtitle('Bajo Nuevo')
+  
+```
+
+```{r}
+library(patchwork)
+
+acc_curves <- accum_curve_by_atoll/accum_curve_serra/accum_curve_bn & 
+  theme_minimal() + 
+  theme(axis.text=element_text(size=12),
+        axis.title=element_text(size=14,face="bold"))
+
+ggsave(acc_curves, filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_acc_curves.png"), 
+       dpi = 300, width = 8, height = 10)
+
+
+ggsave('test.png', test, width = 8, height = 8)
+```
 
 ```{r}
 summary_by_taxa <- fish_data_by_station %>% 
