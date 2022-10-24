@@ -24,7 +24,7 @@ options(dplyr.summarise.inform = FALSE)
 library(raster)
 library(sf)
 library(bigrquery)
-#library(connections)
+library(connections)
 library(tidyverse)
 
 source("_prj_vars.R")
@@ -44,6 +44,7 @@ bq_project <- connection_open(bigquery(),
                                 use_legacy_sql = FALSE,
                                 allowLargeResults = TRUE)
 
+list_datasets(bq_project)
 # bq_dataset("emlab-gcp", 
 #            "ps_colombia") %>% 
 #   bq_dataset_create()
@@ -599,7 +600,8 @@ seaflower_detects <- sar_detections %>%
   # labs(title = "Vessel detections",
   #      subtitle = "2016-2020",
   #      x = "", y = "")+
-  paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+  #paletteer::scale_color_paletteer_d(palette = "awtools::mpalette", direction = -1)+
+   scale_color_manual(values = c("#5BC0BE", "#4C2E05"))+
   bbplot::bbc_style()+
   ggspatial::annotation_scale(location = "br", 
                               width_hint = 0.2, 
@@ -793,7 +795,8 @@ sar_monthly_bar <- monthly_pattenrs %>%
         panel.background = element_blank())+
   labs(title = "",
        x = "", y = "", fill  = "")+
-    paletteer::scale_fill_paletteer_d("ggsci::default_jama")
+  PristineSeasR::scale_fill_pristine_seas(reverse = T)
+#    paletteer::scale_fill_paletteer_d("ggsci::default_jama")
 
 ggsave(sar_monthly_bar,
        filename = file.path(ps_exp_path, "figures", "seaflower_monthly_SAR.png"), 

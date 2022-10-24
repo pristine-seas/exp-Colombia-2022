@@ -483,7 +483,9 @@ clean_master_taxa %>% filter(is_vme)
 # IUCN
 
 ```{r}
-iucn_db <- read_csv(file.path(ps_data_path, "iucn-redlist-marine-species",  "joined_and_resolved_taxa.csv"))
+iucn_db <- read_csv(file.path(ps_data_path, 
+                              "iucn-redlist-marine-species",  
+                              "joined_and_resolved_taxa.csv"))
   
 iucn_db <- iucn_db %>% 
   filter(taxon_valid_name %in% clean_master_taxa$taxon_sci_name) %>% 

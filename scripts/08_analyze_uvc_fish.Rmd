@@ -85,7 +85,6 @@ caribe_fish_data <- caribe_fish_data %>%
               filter(location == "Caribbean") %>% 
               distinct(ps_taxon_code, taxon_sci_name, family, order, class,
                        is_vme, iucn_redlist_cat, max_length_tl, troph, a, b)) 
-
 ## QA/QC
 
 caribe_fish_data %>%
@@ -183,6 +182,12 @@ station_summary %>%
 
 ```
 
+```{r}
+station_summary <- read_csv(file.path(ps_exp_path, 
+                                      "reports/Caribe/Anexos",
+                                    "Tabla_S4_metricas_univariadas_de_peces_por_estacion.csv"))
+```
+
 ```{r, eval = F}
 serr_map <- station_summary %>% 
   left_join(uvc_meta %>% 
@@ -209,6 +214,7 @@ serr_map <- station_summary %>%
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Habitat", size = bquote('Biomass density '(g/m^2)))+
+  guides(size=guide_legend(override.aes=list(colour="grey")))+
   theme(legend.background = element_blank(),
         legend.position = "right",
         #legend.box = 'vertical',
@@ -220,8 +226,8 @@ serr_map <- station_summary %>%
         panel.grid = element_blank())
 
 serr_map_spanish <- serr_map +
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3", 
-                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar", "pastos marinos"))+
+    PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                             labels = c("Terraza prearrecifal", "Arrecife periferico","Cuenca lagunar", "Pastos marinos"))+
     labs(col = "Habitat", size = bquote('Biomasa '(g/m^2)))
 
 ggsave(serr_map_spanish,
@@ -252,10 +258,11 @@ bn_map <- station_summary %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
+  #paletteer::scale_color_paletteer_d("RColorBrewer::Set3")+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Habitat", size = bquote('Biomass density'(g/m^2)))+
+  guides(size=guide_legend(override.aes=list(colour="grey")))+
   theme(legend.background = element_blank(),
         legend.position = "right",
         # legend.box = 'vertical',
@@ -267,13 +274,15 @@ bn_map <- station_summary %>%
         panel.grid = element_blank())
 
 bn_map_spanish <- bn_map+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3", 
-                                     labels = c("meseta profunda", "arrecife frontal","arrecife lagunar"))+
+  PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                           labels = c("Terraza prearrecifal profunda", 
+                                                "Terraza prearrecifal",
+                                                "Cuenca lagunar"))+
   labs(col = "Habitat", size = bquote('Biomasa '(g/m^2)))
 
 ggsave(bn_map_spanish,
        filename = file.path(ps_exp_path, "figures", "bajo_nuevo_fish_biomass_map_spanish.png"), 
-       dpi = 300, width = 8, height = 6)
+       dpi = 300, width = 8, height = 4)
 ```
 
 ```{r}
@@ -366,19 +375,24 @@ univariate_plots_by_habitat <- transect_summary %>%
   facet_wrap("variable", scales = "free", nrow = 3, 
              labeller = labeller(variable = var_labs))+
   bbplot::bbc_style()+
-  paletteer::scale_fill_paletteer_d("ggsci::default_jama")+
+  #paletteer::scale_fill_paletteer_d("ggsci::default_jama")+
+  PristineSeasR::scale_fill_pristine_seas(palette = "alternative")+
   theme(legend.position = "bottom", plot.title.position = "plot") +
-  labs(fill = "", x = "", title = "")
-  
+  labs(fill = "", x = "", title = "")+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
+
 ggsave(univariate_plots_by_habitat, 
        filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_univariate_boxplots_by_habitat.png"), 
        dpi = 300, width = 11, height = 10)
 
 univariate_plots_by_habitat_SP <- univariate_plots_by_habitat +
+  PristineSeasR::scale_fill_pristine_seas(palette = "alternative",
+                                          labels = c("Terraza prearrecifal profunda", 
+                                               "Terraza prearrecifal",
+                                               "Arrecife periferico", "Cuenca lagunar", 
+                                               "Pastos marinos"))
   paletteer::scale_fill_paletteer_d("ggsci::default_jama", 
-                                    labels = c("meseta profunda", "arrecife frontal",
-                                               "arrecife periferico", "arrecife lagunar", 
-                                               "pastos marinos")) 
+                                    ) 
 univariate_plots_by_habitat_SP %>% 
   ggsave(filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_univariate_boxplots_by_habitat-spanish.png"), 
          dpi = 300, width = 12, height = 10)
@@ -453,8 +467,8 @@ accum_curve_by_atoll <- ggiNEXT(ac_curve_by_atoll)+
   labs(x = "", y = "")+
   theme(legend.position = "right")+
   guides(linetype = "none")+
-  scale_color_manual(values = c("#C59B76", "#78BC61"))+
-  scale_fill_manual(values = c("#C59B76", "#78BC61"))
+  scale_color_manual(values = c("#4C2E05", "#5BC0BE"))+
+  scale_fill_manual(values = c("#4C2E05", "#5BC0BE"))
 ```
 
 ```{r}
@@ -466,7 +480,7 @@ acc_data_by_habitat_serr <- fish_data_by_transect %>%
               values_from = presence, values_fill = 0) %>% 
   group_by(habitat) %>% 
   group_split(keep = F)  %>% 
-  set_names(c("A. frontal", "A. periferico", "A. lagunar", "pastos")) %>% 
+  set_names(c("Terraza prearrecifal", "Arrecife periferico", "Cuenca lagunar", "Pastos marinos")) %>% 
   map(.f = ~column_to_rownames(.x, "taxon_sci_name")) %>% 
   map(.f = ~select_if(.x, ~ !is.numeric(.) || sum(.) != 0))%>% 
   map(.f = ~filter(.x, rowSums(.x)>0))
@@ -478,8 +492,10 @@ accum_curve_serra <- ggiNEXT(ac_curve_by_hab_serra)+
   labs(x = "", y = "Diversidad de especies")+
   theme(legend.position = "right")+
   guides(linetype = "none")+
-  PristineSeasR::scale_color_pristine_seas()+
-  PristineSeasR::scale_fill_pristine_seas()+
+  PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                           reverse = T)+
+  PristineSeasR::scale_fill_pristine_seas(palette = "alternative",
+                                          reverse = T)+
   ggtitle('Serranilla')
 ```
 
@@ -492,7 +508,7 @@ acc_data_by_habitat_bn <- fish_data_by_transect %>%
               values_from = presence, values_fill = 0) %>% 
   group_by(habitat) %>% 
   group_split(keep = F)  %>% 
-  set_names(c("M. profunda", "A. frontal", "A. lagunar")) %>% 
+  set_names(c("Terraza prearrecifal profunda", "Terraza prearrecifal", "Cuenca lagunar")) %>% 
   map(.f = ~column_to_rownames(.x, "taxon_sci_name")) %>% 
   map(.f = ~select_if(.x, ~ !is.numeric(.) || sum(.) != 0)) %>% 
   map(.f = ~filter(.x, rowSums(.x)>0))
@@ -500,14 +516,15 @@ acc_data_by_habitat_bn <- fish_data_by_transect %>%
 ac_curve_by_hab_bn <- iNEXT(acc_data_by_habitat_bn, q = 0, 
                                datatype = "incidence_raw", endpoint = 100,  se = T)
 
+library(PristineSeasR)
+
 accum_curve_bn <- ggiNEXT(ac_curve_by_hab_bn)+
   labs(x = "Número of transectos", y = "")+
   theme(legend.position = "right")+
   guides(linetype = "none")+
-  PristineSeasR::scale_color_pristine_seas()+
-  PristineSeasR::scale_fill_pristine_seas() +
+  PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+  PristineSeasR::scale_fill_pristine_seas(palette = "alternative") +
   ggtitle('Bajo Nuevo')
-  
 ```
 
 ```{r}
@@ -518,11 +535,9 @@ acc_curves <- accum_curve_by_atoll/accum_curve_serra/accum_curve_bn &
   theme(axis.text=element_text(size=12),
         axis.title=element_text(size=14,face="bold"))
 
-ggsave(acc_curves, filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_acc_curves.png"), 
+ggsave(acc_curves, 
+       filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_acc_curves.png"), 
        dpi = 300, width = 8, height = 10)
-
-
-ggsave('test.png', test, width = 8, height = 8)
 ```
 
 ```{r}
@@ -781,19 +796,24 @@ community_pcoa_plots <- map(c("habitat", "sublocation"),
             axis.text = element_text(size = 10, colour = "gray25"),
             axis.title = element_text(size = 12, colour = "gray25"),
             legend.key = element_blank())+
-        paletteer::scale_color_paletteer_d("ggsci::default_jama")+
+      PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
       scale_alpha(range=c(0.6,1)))
 
 pcoa_by_hab <- community_pcoa_plots[[1]] +
   labs(color = "Habitat") + 
-  paletteer::scale_color_paletteer_d("ggsci::default_jama", 
-                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar")) 
+  PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                           labels = c("Terraza prearrecifal", 
+                                                "Arrecife periferico","Cuenca lagunar"))
+ 
+pcoa_by_location <- community_pcoa_plots[[2]]+ 
+  scale_color_manual(values = c("#4C2E05", "#5BC0BE"))
   
 library(patchwork)
 
 pcoa_plots <- pcoa_by_location/pcoa_by_hab 
   
-ggsave(pcoa_plots, filename = file.path(ps_exp_path, "figures", "uvc_caribe_fish_pcoa_plots.png"), 
+ggsave(pcoa_plots, filename = file.path(ps_exp_path, 
+                                        "figures", "uvc_caribe_fish_pcoa_plots.png"), 
        dpi = 300, width = 8, height = 10)
 
 # ggsave(pcoa_by_hab, 

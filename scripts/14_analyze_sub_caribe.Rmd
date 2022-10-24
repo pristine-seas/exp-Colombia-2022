@@ -85,7 +85,8 @@ sub_bajo_nuevo_barplot <- bn_fish_obs %>%
   ggplot()+
   geom_col(aes(x = depth_bin, y = value, fill = name), position = "dodge")+
   labs(y = "", x = "Depth (m)")+
-  paletteer::scale_fill_paletteer_d("awtools::mpalette", labels = c("# individuos", "# taxones"))+
+  PristineSeasR::scale_fill_pristine_seas(labels = c("# individuos", "# taxones"))+
+  #paletteer::scale_fill_paletteer_d("awtools::mpalette", labels = c("# individuos", "# taxones"))+
   bbplot::bbc_style()
 
 ggsave(plot = sub_bajo_nuevo_barplot, 

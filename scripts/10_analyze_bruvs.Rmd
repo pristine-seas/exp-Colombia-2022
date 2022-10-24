@@ -142,7 +142,8 @@ bn_map <- bruvs_summary_by_station %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  viridis::scale_color_viridis()+
+  paletteer::scale_color_paletteer_c(palette = "ggthemes::Blue-Green Sequential",direction = -1)+
+  guides(size=guide_legend(override.aes=list(colour="grey")))+
   scale_shape_manual(values= seq(100:110), name = "")+
   theme_light()+
   labs(col = "# Taxones", shape = "", size = "MaxN total")+

@@ -264,10 +264,10 @@ Compared to Bajo Nuevo, hard coral cover was considerably lower in Serranilla wi
 ```{r}
 p_cover_by_habitat_fg <- p_cover_by_habitat_fg %>% 
   mutate(habitat_spanish = case_when(habitat == "seagrass beds" ~ "Pastos marinos",
-                                     habitat == "deep platform" ~ "Meseta profunda",
-                                     habitat == "lagoon patch reef" ~ "Arrecife lagunar",
+                                     habitat == "deep platform" ~ "Terraza prearrecifal profunda",
+                                     habitat == "lagoon patch reef" ~ "Cuenca lagunar",
                                      habitat == "island fringing reef" ~ "Arrecife periferico",
-                                     habitat == "forereef" ~ "Arrecife frontal"),
+                                     habitat == "forereef" ~ "Terraza prearrecifal"),
          functional_group_spanish = case_when(functional_group == "Seagrass" ~ "Pastos marinos",
                                               functional_group == "Encrusting non-calcareous algae" ~ "Alga encrustante no calcarea",
                                               functional_group == "Erect algae" ~ "Alga erecta",
@@ -291,6 +291,7 @@ p_cover_plot <- p_cover_by_habitat_fg %>%
   facet_wrap("sublocation")+
   coord_flip()+
   scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(20))+
+  #PristineSeasR::scale_fill_pristine_seas(palette = "alternative")+
   labs(y = "", x = "")+
   bbplot::bbc_style()+
   theme(legend.position = "bottom")+
@@ -298,7 +299,7 @@ p_cover_plot <- p_cover_by_habitat_fg %>%
 
 ggsave(p_cover_plot, 
        filename = file.path(ps_exp_path, "figures", "uvc_caribe_p_cover_plot_spanish.png"),
-       dpi = 300, width = 12, height = 10)
+       dpi = 300, width = 14, height = 10)
 ```
 
 ```{r,  include = T, echo = F}
@@ -384,11 +385,15 @@ serr_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",
-                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar", "pastos marinos"))+
+  PristineSeasR::scale_color_pristine_seas("alternative",
+                                           labels = c("Terraza arrecifal", 
+                                                      "Arrecife periferico",
+                                                      "Cuenca lagunar", 
+                                                      "Pastos marinos"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Hábitat", size = "% Cobertura")+
+  guides(size=guide_legend(override.aes=list(colour="grey")))+
   theme(legend.background = element_blank(),
         legend.position = "right",
         # legend.box = 'vertical',
@@ -427,11 +432,13 @@ bn_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",
-                                     labels = c("meseta profunda", "arrecife frontal", "arrecife lagunar"))+
+  PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                     labels = c("Terraza prearrecifal profunda", 
+                                                "Terraza prearrecifal", "Cuenca lagunar"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Hábitat", size = "% Cobertura")+
+    guides(size=guide_legend(override.aes=list(colour="grey")))+
   theme(legend.background = element_blank(),
         legend.position = "right",
         # legend.box = 'vertical',
@@ -444,7 +451,7 @@ bn_map <- p_cover_by_station_fg %>%
 
 ggsave(bn_map,
        filename = file.path(ps_exp_path, "figures", "bajo_nuevo_hard_coral_cover_map_spanish.png"), 
-       dpi = 300, height = 5, width = 6.5)
+       dpi = 300, width = 8, height = 4)
 ```
 
 In addition to the standardized point contact transects, we prospected around each site and recorded the presence of all hard corals. Seven additional taxa were observed outside the transects including *Stylaster roseus*,  *Mycetophyllia lamarckiana*, and *Favia fragum*.
@@ -542,27 +549,27 @@ shrd_habs_pcover_wide <- shrd_habs_pcover_wide %>%
 pt_dist <- vegan::vegdist(shrd_habs_pcover_wide, 
                           method = "bray")
 
-sessile_pcoa_c <- dbrda(pt_dist ~ sublocation + habitat, 
+sessile_pcoa_c <- vegan::dbrda(pt_dist ~ sublocation + habitat, 
                     data = shrd_habs_meta,
                     dist = "bray", 
                     add = "lingoes")
 
-sessile_pcoa_c_env_fit <- envfit(sessile_pcoa_c, 
+sessile_pcoa_c_env_fit <- vegan::envfit(sessile_pcoa_c, 
                                  shrd_habs_meta  %>% 
                                    select(habitat,  sublocation))
 
-sessile_pcoa_c_spp_fit <- envfit(sessile_pcoa_c, 
+sessile_pcoa_c_spp_fit <- vegan::envfit(sessile_pcoa_c, 
                                  shrd_habs_pcover_wide)
 
 sessile_pcoa_c_spp_scores <- sessile_pcoa_c_spp_fit %>% 
-  scores("vectors") %>% 
+  vegan::scores("vectors") %>% 
   as_tibble(rownames = "ps_taxon_code") %>% 
   mutate(r = sessile_pcoa_c_spp_fit$vectors$r,
          p = sessile_pcoa_c_spp_fit$vectors$pvals)
 
 sessile_pcoa_c_axis <- BiodiversityR::axis.long(sessile_pcoa_c, choices = c(1, 2))
 
-sessile_pcoa_c_site_scores <- scores(sessile_pcoa_c)$sites %>% 
+sessile_pcoa_c_site_scores <- vegan::scores(sessile_pcoa_c)$sites %>% 
   as_tibble(rownames = "ps_station_id") %>% 
   inner_join(shrd_habs_meta)
 ```
@@ -607,12 +614,16 @@ community_pcoa_plots <- map(c("habitat", "sublocation"),
       paletteer::scale_color_paletteer_d("ggsci::default_jama")
 )
 
-pcoa_by_atoll <- community_pcoa_plots[[2]] 
+
+pcoa_by_atoll <- community_pcoa_plots[[2]] + 
+  scale_color_manual(values = c("#4C2E05", "#5BC0BE"))
 
 pcoa_by_hab <- community_pcoa_plots[[1]]+
     labs(color = "Habitat") + 
-  paletteer::scale_color_paletteer_d("ggsci::default_jama", 
-                                     labels = c("arrecife frontal", "arrecife periferico","arrecife lagunar")) 
+    PristineSeasR::scale_color_pristine_seas(palette = "alternative",
+                                             labels = c("Terraza prearrecifal", 
+                                                        "Arrecife periferico",
+                                                        "Cuenca lagunar")) 
 
 library(patchwork)
 
@@ -672,10 +683,10 @@ n_ind_vagile_long <- n_ind_vagile_long %>%
 
 n_ind_vagile_long <- n_ind_vagile_long %>% 
    mutate(habitat_spanish = case_when(habitat == "seagrass beds" ~ "Pastos marinos",
-                                     habitat == "deep platform" ~ "Meseta profunda",
-                                     habitat == "lagoon patch reef" ~ "Arrecife lagunar",
+                                     habitat == "deep platform" ~ "Terraza prearrecifal profunda",
+                                     habitat == "lagoon patch reef" ~ "Cuenca lagunar",
                                      habitat == "island fringing reef" ~ "Arrecife periferico",
-                                     habitat == "forereef" ~ "Arrecife frontal"))
+                                     habitat == "forereef" ~ "Terraza prearrecifal"))
 
 n_ind_vagile_long %>% 
   ungroup() %>% 
@@ -692,6 +703,8 @@ var_labs <- c("Individuos por estación", "Número de taxones")
 
 names(var_labs) <- c("mean_n", "n_taxa")
 
+library(PristineSeasR)
+
 vagila_barplot <- n_ind_vagile_long %>% 
   group_by(sublocation, habitat_spanish) %>% 
   summarize(n_taxa = n_distinct(taxon[n_ind > 0]),
@@ -702,8 +715,9 @@ vagila_barplot <- n_ind_vagile_long %>%
   geom_col(aes(x = sublocation, y = value, fill = fct_reorder(habitat_spanish, value)), position = "dodge")+
   facet_wrap("name", scale = "free", labeller = labeller(name = var_labs))+
   bbplot::bbc_style()+
-  paletteer::scale_fill_paletteer_d("rcartocolor::Antique", direction = 1)+
-  theme(legend.position = "bottom")
+  PristineSeasR::scale_fill_pristine_seas()+
+  theme(legend.position = "bottom")+
+  guides(fill=guide_legend(nrow=2,byrow=TRUE))
 
 ggsave(vagila_barplot, 
        filename = file.path(ps_exp_path, "figures", "uvc_caribe_vagile_barplot_spanish.png"), 
