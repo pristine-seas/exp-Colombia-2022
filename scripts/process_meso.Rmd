@@ -1,0 +1,572 @@
+---
+title: "Process meso"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+library(vegan)
+library(tidyverse)
+load(file = file.path(ps_exp_path, 
+                      "data", "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+meso_meta <- read_csv(file.path(ps_exp_path, 
+                               "data", "primary", "processed", "metadata", "meso_meta.csv"))
+
+meso_uwa_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                             "data/primary/raw",
+                                             "meso","Colombia_Mesophotic_Metadata_12102022.xlsx"), 
+                                   sheet = "Metadata") %>% 
+  janitor::clean_names() %>% 
+  select(ps_station_id, op_code = sample)
+
+meso_MaxN <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "meso","Colombia_Mesophotic_MaxN_25_10_2022.xlsx"), 
+                               sheet = "Raw") %>% 
+  janitor::clean_names() %>% 
+  left_join(meso_uwa_meta) %>% 
+  select(ps_station_id, taxon = binomial, max_n, frame, period_time_mins, time_mins, 
+         filename, op_code)
+  
+meso_lengths <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                         "data/primary/raw",
+                                         "meso","Colombia_Mesophotic_Lengths_25_10_2022.xlsx"), 
+                               sheet = "Raw Lengths") %>% 
+  janitor::clean_names() %>% 
+  left_join(meso_uwa_meta) %>% 
+  select(ps_station_id, op_code, taxon = binomial, number, length_mm, precision_mm,frame, time_mins, period_time_mins)
+```
+
+# Clean taxa
+
+```{r clean}
+meso_taxa <- meso_MaxN %>% 
+  select(binomial) %>% 
+  bind_rows(meso_lengths %>% 
+              select(binomial)) %>% 
+  distinct(binomial) %>% 
+  filter(!str_detect(binomial, "Juvenile|Unknown"))
+
+clean_names <- bdc::bdc_clean_names(meso_taxa$binomial) %>% 
+  janitor::clean_names() %>% 
+  select(taxon = scientific_name, 
+         taxon_clean = names_clean) %>% 
+  mutate(taxon_clean = coalesce(taxon_clean, 
+                                taxadb::clean_names(taxon, lowercase = F))) %>% 
+  distinct(taxon, taxon_clean) 
+
+clean_names %>% 
+  filter(taxon!= taxon_clean)
+
+clean_names$taxon_clean[clean_names$taxon == "Class:Gastropoda (Mollusca) sp"] <- "Gastropoda"
+clean_names$taxon_clean[clean_names$taxon == "Class:Crustacea (Hermit Crab) sp"] <- "Crustacea"
+
+clean_names %>% 
+  janitor::get_dupes(taxon)
+
+meso_taxa <- meso_taxa %>% 
+  left_join(clean_names, by = c("binomial" = "taxon")) %>% 
+  rename(taxon = binomial)
+```
+
+```{r gnr}
+meso_gnr <- taxize::gnr_resolve(meso_taxa$taxon_clean, 
+                                   canonical = F,
+                                   with_canonical_ranks = T,
+                    data_source_ids = c(9, 11)) %>% 
+  filter(submitted_name != matched_name2)
+```
+
+```{r worms}
+taxonomy_worms <- meso_taxa$taxon_clean %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                              paste0("WORMS:", valid_aphia_id),
+                              NA_character_)) %>% 
+  select(taxon_clean = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxon_clean) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxon_clean) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+taxonomy_worms %>% 
+  filter(taxon_valid_name != taxon_clean) 
+
+meso_taxa %>% 
+  janitor::get_dupes(taxon_clean)
+
+meso_taxa %>% 
+  filter(!taxon_clean %in% taxonomy_worms$taxon_clean)
+
+meso_taxa <- meso_taxa %>% 
+  left_join(taxonomy_worms) 
+```
+
+```{r fishbase}
+fishbase_params <- meso_taxa %>% 
+  filter(taxon_rank == "species", phylum == "Chordata") %>% 
+  pull(taxon_valid_name) %>% 
+  rfishbase::estimate() %>% 
+  janitor::clean_names() %>% 
+  select(fb_taxa_code = spec_code, species, max_length_tl, troph, se_troph, a, sd_log10a, b, sd_b,
+         method_ab, age_min, age_max, feeding_path) %>% 
+  distinct()
+
+meso_taxa <- meso_taxa %>% 
+  left_join(fishbase_params, 
+             by = c("taxon_valid_name"="species")) %>% 
+  select(-taxon_clean)
+
+impute.mean <- function(x) replace(x, is.na(x), mean(x, na.rm = TRUE))
+
+meso_taxa <- meso_taxa %>% 
+  group_by(genus) %>% 
+  mutate_at(vars(a, sd_log10a, b, sd_b, se_troph, troph, max_length_tl), 
+            .funs =  impute.mean) %>% 
+  mutate_all(~ifelse(is.nan(.), NA, .)) %>% 
+  mutate(method_ab = if_else(is.na(method_ab) & !is.na(a), 
+                             "Imputed at genus level", 
+                             method_ab)) %>% 
+  ungroup()
+
+meso_taxa %>% 
+  filter(taxon_rank == "species", is.na(a))
+
+fish_missing_lw_params <- tribble(~taxon_valid_name, ~a, ~b, ~troph, ~max_length_tl,
+                                  "Azurina cyanea", 0.01259, 3.03, 3.7, 15)
+
+meso_taxa <- meso_taxa %>% 
+  coalesce_join(fish_missing_lw_params,
+                by = "taxon_valid_name") 
+```
+
+```{r iucn}
+iucn_db <- read_csv(file.path(ps_data_path, 
+                              "iucn-redlist-marine-species",  
+                              "joined_and_resolved_taxa.csv"))
+  
+iucn_db <- iucn_db %>% 
+  filter(taxon_valid_name %in% meso_taxa$taxon_valid_name) %>% 
+  distinct(taxon_valid_name, iucn_redlist_cat, iucn_trend)  
+  
+iucn_db %>% 
+  janitor::get_dupes(taxon_valid_name)
+
+meso_taxa <- meso_taxa %>% 
+  left_join(iucn_db)
+
+meso_taxa %>% 
+  group_by(iucn_redlist_cat) %>% 
+  summarize(n_distinct(taxon_id))
+```
+
+```{r common_names}
+worms_common_names <- meso_taxa %>% 
+  filter(str_detect(taxon_id, "WORMS")) %>% 
+  transmute(worms_id = as.numeric(str_remove_all(taxon_id, "WORMS:"))) %>% 
+  pull() %>% 
+  worrms::wm_common_id_() %>% 
+  filter(language_code %in% c("eng", "spa")) %>% 
+  mutate(vernacular = str_squish(str_to_sentence(vernacular))) %>% 
+  group_by(id, language_code) %>% 
+  summarise(common_names = paste(vernacular, collapse = ";"))
+
+worms_common_names <- worms_common_names %>% 
+  pivot_wider(names_from = language_code, 
+              names_prefix = "common_name_",
+              values_from = common_names)
+
+worms_common_names$id <- paste0("WORMS:", worms_common_names$id)
+
+meso_taxa <- meso_taxa %>% 
+  left_join(worms_common_names, by = c("taxon_id" = "id"))
+
+write_csv(meso_taxa,
+          file.path(ps_exp_path, "data", "primary", "processed", "taxa", "meso_taxa.csv"))
+```
+
+# MaxN
+
+```{r}
+meso_taxa <- read_csv(file.path(ps_exp_path, 
+                                "data", "primary", "processed", "taxa", "meso_taxa.csv"))
+
+meso_MaxN <- meso_MaxN %>% 
+  select(ps_station_id, taxon, max_n) %>% 
+  pivot_wider(names_from = taxon, values_from = max_n, values_fill = 0) %>% 
+  pivot_longer(!ps_station_id, names_to = "taxon", values_to = "max_n") %>% 
+  left_join(meso_MaxN)
+
+summary_maxN <- meso_MaxN %>% 
+  left_join(meso_meta) %>% 
+  group_by(location, sublocation, taxon) %>%
+  summarize(sum_MaxN = sum(max_n, na.rm = T),
+            max_MaxN = max(max_n, na.rm = T),
+            mean_MaxN = mean(max_n, na.rm = T),
+            n_stations = n_distinct(ps_station_id[max_n > 0])) %>% 
+  ungroup() %>% 
+  left_join(meso_meta %>% 
+              group_by(sublocation) %>% 
+              summarize(total_st = n_distinct(ps_station_id)) %>% 
+              ungroup()) %>% 
+  mutate(f_obs = round(100*n_stations/total_st, 2)) %>% 
+  select(-total_st)
+
+summary_maxN <- summary_maxN %>% 
+  left_join(meso_taxa %>% 
+              select(taxon, taxon_valid_name, family)) %>% 
+  select(sublocation, family, taxon, taxon_valid_name, everything()) %>% 
+  arrange(desc(family))
+
+summary_maxN %>% 
+  group_by(sublocation) %>% 
+  summarize(n_distinct(taxon[sum_MaxN > 0]),
+            n_distinct(family[sum_MaxN > 0]))
+```
+```{r}
+summary_maxN %>% 
+  filter(sublocation != "Golfo de Tribuga") %>% 
+  select(sublocation, family, taxon, sum_MaxN, mean_MaxN, max_MaxN, f_obs) %>% 
+  group_by(sublocation) %>% 
+  slice_max(n = 20, order_by = f_obs) %>% 
+  mutate(across(c(mean_MaxN, f_obs), round, 2)) %>% 
+  pivot_longer(-c(family, taxon, sublocation)) %>% 
+  pivot_wider(names_from = c(sublocation, name), values_from = value, values_fill = 0) %>% 
+  dplyr::select(family, everything()) %>% 
+  arrange(family, taxon)
+```
+
+```{r}
+write_csv(meso_MaxN,
+          file.path(ps_exp_path,
+                    "data/primary/processed/analyses", 
+                    "meso_maxN.csv"))
+```
+
+# Biomass
+
+```{r}
+meso_biomass <- meso_lengths %>% 
+  left_join(meso_taxa %>% 
+              select(taxon, a, b)) %>% 
+  mutate(biomass = number*a*(length_mm/10)^b) %>% 
+  select(ps_station_id, taxon, n = number, biomass, length_mm, precision_mm, everything()) %>% 
+  group_by(ps_station_id, taxon) %>% 
+  summarize(n = sum(n),
+            biomass_gr = sum(biomass),
+            mean_length_cm = mean(length_mm/10),
+            min_length_cm = min(length_mm/10),
+            max_length_cm = max(length_mm/10)) %>% 
+  ungroup() %>% 
+  arrange(ps_station_id) %>% 
+  filter(!is.na(biomass_gr))
+
+meso_biomass <- meso_biomass %>% 
+  select(ps_station_id, taxon, biomass_gr) %>% 
+  pivot_wider(names_from = taxon, values_from = biomass_gr, values_fill = 0) %>% 
+  pivot_longer(!ps_station_id, values_to = "biomass_gr", names_to = "taxon") %>% 
+  left_join(meso_biomass) %>% 
+  replace_na(list(n = 0)) %>% 
+  mutate_if(is.numeric, round, 4)
+
+write_csv(meso_biomass,
+          file.path(ps_exp_path, "data", "primary", "processed/analyses", "meso_biomass.csv"))
+```
+
+```{r}
+meso_biomass
+```
+
+```{r}
+biomass_by_station <- meso_biomass %>% 
+  left_join(meso_meta) %>% 
+  group_by(sublocation, ps_station_id, depth_m) %>% 
+  summarize(biomass_gr = sum(biomass_gr),
+            abundance = sum(n),
+            richness = n_distinct(taxon)) %>% 
+  ungroup()
+
+biomass_by_station %>% 
+  group_by(sublocation) %>% 
+  summarize(mean(biomass_gr),
+            median(biomass_gr))
+
+biomass_by_station %>% 
+  ggplot(aes(x = sublocation, y = biomass_gr))+
+  geom_violin(aes(fill = sublocation, 
+                  fill = after_scale(colorspace::lighten(fill, .7))))+
+  stat_summary(
+    geom = "point", 
+    fun = median,
+    shape = 23, size = 6, color = "black", stroke = 1.5
+  ) + 
+  ggforce::geom_sina(
+    maxwidth = .5, scale = "count", 
+    size = 3, alpha = .5, seed = 0
+  )
+```
+
+```{r}
+tmp <- meso_biomass %>% 
+  left_join(meso_taxa %>% select(taxon,family)) %>% 
+  left_join(meso_meta %>% select(ps_station_id, sublocation, depth_m))
+
+vegan::adonis2(tmp %>% 
+                 dplyr::select(biomass_gr) ~  sublocation + depth_m + family, 
+               data = tmp,
+               by = "margin",
+               method = "euclidean")
+```
+
+```{r}
+meso_biomas_by_taxa <- meso_biomass %>% 
+  left_join(meso_meta) %>% 
+  left_join(meso_taxa) %>% 
+  group_by(sublocation, taxon, family) %>% 
+  summarise(biomass_gr = mean(biomass_gr),
+            n= n_distinct(ps_station_id[biomass_gr>0])) %>%
+  ungroup() 
+
+meso_biomas_by_taxa %>% 
+  filter(n > 0) %>% 
+  ggplot(aes(x = family, y = biomass_gr, fill = sublocation))+
+  geom_boxplot() +
+  coord_flip()
+  
+```
+
+```{r}
+meso_biomas_by_family %>% 
+  ggplot()+
+  geom_col(aes(x = sublocation, y = biomass_gr, fill = family))+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  coord_flip()+
+    labs(y = "", x = "")+
+  bbplot::bbc_style()+
+  theme(legend.position = "bottom")+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))
+  
+ggsave(filename = file.path(ps_exp_path, 
+                            "figures", "meso_avg_biomass_by_family_and_location.png"),
+       width = 13, height = 8)
+```
+
+# Community
+
+## By biomass
+
+```{r}
+meso_biomass_wide <- meso_biomass %>% 
+  select(ps_station_id, taxon, biomass_gr) %>% 
+  pivot_wider(names_from = "taxon", values_from = "biomass_gr", values_fill = 0) 
+
+meso_biomass_dist <- meso_biomass_wide %>% 
+  column_to_rownames("ps_station_id") %>% 
+  as.matrix() %>% 
+  vegan::vegdist(method = "bray") 
+
+meso_biomass_pcoa_c <- vegan::dbrda(meso_biomass_dist ~ sublocation + depth_m, 
+                                    data = meso_meta %>% 
+                                      inner_join(meso_biomass_wide),
+                                    dist = "bray", 
+                                    add = "lingoes")
+
+meso_biomass_pcoa_c_env_fit <- vegan::envfit(meso_biomass_dist, 
+                                             meso_meta %>% 
+                                               inner_join(meso_biomass_wide) %>% 
+                                               select(depth_m,  sublocation))
+
+meso_biomass_pcoa_c_spp_fit <- vegan::envfit(meso_biomass_pcoa_c, 
+                                             meso_biomass_wide)
+
+meso_biomass_pcoa_c_spp_scores <- meso_biomass_pcoa_c_spp_fit %>% 
+  vegan::scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = meso_biomass_pcoa_c_spp_fit$vectors$r,
+         p = meso_biomass_pcoa_c_spp_fit$vectors$pvals) %>% 
+  arrange(desc(r))
+
+meso_biomass_pcoa_c_axis <- BiodiversityR::axis.long(meso_biomass_pcoa_c, choices = c(1, 2))
+
+meso_biomass_pcoa_c_site_scores <- vegan::scores(meso_biomass_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  inner_join(meso_meta %>% 
+               select(ps_station_id, sublocation , depth_m))
+```
+
+```{r}
+anova(meso_biomass_pcoa_c) # overall test of the significant of the analysis
+anova(meso_biomass_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(meso_biomass_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. variables
+
+biomass_adonis <- vegan::adonis2(meso_biomass_dist ~  depth_m  + sublocation,
+        data = meso_meta %>% inner_join(meso_biomass_wide),
+        by = "margin")
+
+biomass_adonis
+```
+
+
+```{r}
+ggplot() +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL))+
+  geom_point(data = meso_biomass_pcoa_c_site_scores,
+             aes(x = dbRDA1, y = dbRDA2,, col = sublocation)) +
+  labs(x = meso_biomass_pcoa_c_axis$label[1], y = meso_biomass_pcoa_c_axis$label[2])+
+  geom_segment(data = meso_biomass_pcoa_c_spp_scores %>% 
+                 slice_max(n = 5, order_by = r), 
+               aes(x = 0, y = 0, xend = dbRDA1*3, yend = dbRDA2*3, alpha = r), 
+               colour = "black", 
+               size = 0.2, 
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             type = 'open', ends = "last"))+
+  ggrepel::geom_text_repel(data = meso_biomass_pcoa_c_spp_scores %>% 
+                             slice_max(n = 5, order_by = r), 
+                           aes(x=dbRDA1*3, y=dbRDA2*3, label = ps_taxon_code, alpha = r),
+                           colour="black",
+                           show.legend = F) +
+  coord_fixed(ratio=1)+
+  labs(color = "", alpha = bquote('R'^'2'))+
+  ggforce::geom_mark_ellipse(data = meso_biomass_pcoa_c_site_scores, 
+                             aes(x=dbRDA1, y = dbRDA2, colour = sublocation, 
+                                 fill=after_scale(alpha(colour, 0.01))), 
+                             expand=0, size=0.2, show.legend=FALSE)+
+      theme(panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_line("gray25"),
+            text = element_text(size = 12, family = "Arial"),
+            axis.text = element_text(size = 10, colour = "gray25"),
+            axis.title = element_text(size = 12, colour = "gray25"),
+            legend.key = element_blank())+
+      PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+      scale_alpha(range=c(0.6,1))
+
+ggsave("test.png", width = 8, height  = 8)
+```
+
+## By MaxN
+
+```{r}
+meso_maxN_wide <- meso_MaxN %>% 
+  select(ps_station_id, taxon, max_n) %>% 
+  pivot_wider(names_from = "taxon", values_from = "max_n", values_fill = 0) %>% 
+  filter(!ps_station_id %in% meso_meta$ps_station_id[meso_meta$sublocation == "Golfo de Tribuga"])
+
+meso_maxN_dist <- meso_maxN_wide %>% 
+  column_to_rownames("ps_station_id") %>% 
+  as.matrix() %>% 
+  vegan::vegdist(method = "bray") 
+
+meso_maxN_pcoa_c <- vegan::dbrda(meso_maxN_dist ~ sublocation + depth_m, 
+                                    data = meso_meta %>% 
+                                      inner_join(meso_maxN_wide),
+                                    dist = "bray", 
+                                    add = "lingoes")
+
+meso_maxN_pcoa_c_env_fit <- vegan::envfit(meso_maxN_dist, 
+                                             meso_meta %>% 
+                                               inner_join(meso_maxN_wide) %>% 
+                                               select(depth_m,  sublocation))
+
+meso_maxN_pcoa_c_spp_fit <- vegan::envfit(meso_maxN_pcoa_c, 
+                                             meso_maxN_wide)
+
+meso_maxN_pcoa_c_spp_scores <- meso_maxN_pcoa_c_spp_fit %>% 
+  vegan::scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = meso_maxN_pcoa_c_spp_fit$vectors$r,
+         p = meso_maxN_pcoa_c_spp_fit$vectors$pvals)
+
+meso_maxN_pcoa_c_axis <- BiodiversityR::axis.long(meso_maxN_pcoa_c, choices = c(1, 2))
+
+meso_maxN_pcoa_c_site_scores <- vegan::scores(meso_maxN_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  inner_join(meso_meta %>% 
+               select(ps_station_id, sublocation , depth_m))
+```
+
+```{r}
+anova(meso_maxN_pcoa_c) # overall test of the significant of the analysis
+anova(meso_maxN_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(meso_maxN_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. variables
+
+maxN_adonis <- vegan::adonis2(meso_maxN_dist ~  depth_m  + sublocation,
+        data = meso_meta %>% inner_join(meso_maxN_wide),
+        by = "margin")
+
+maxN_adonis
+```
+
+```{r}
+ggplot() +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL))+
+  geom_point(data = meso_maxN_pcoa_c_site_scores,
+             aes(x = dbRDA1, y = dbRDA2,, col = sublocation)) +
+  labs(x = meso_maxN_pcoa_c_axis$label[1], y = meso_maxN_pcoa_c_axis$label[2])+
+  geom_segment(data = meso_maxN_pcoa_c_spp_scores %>% 
+                 slice_max(n = 5, order_by = r), 
+               aes(x = 0, y = 0, xend = dbRDA1*3, yend = dbRDA2*3, alpha = r), 
+               colour = "black", 
+               size = 0.2, 
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             type = 'open', ends = "last"))+
+  ggrepel::geom_text_repel(data = meso_maxN_pcoa_c_spp_scores %>% 
+                             slice_max(n = 5, order_by = r), 
+                           aes(x=dbRDA1*3, y=dbRDA2*3, label = ps_taxon_code, alpha = r),
+                           colour="black",
+                           show.legend = F) +
+  coord_fixed(ratio=1)+
+  labs(color = "", alpha = bquote('R'^'2'))+
+  ggforce::geom_mark_ellipse(data = meso_maxN_pcoa_c_site_scores, 
+                             aes(x=dbRDA1, y = dbRDA2, colour = sublocation, 
+                                 fill=after_scale(alpha(colour, 0.01))), 
+                             expand=0, size=0.2, show.legend=FALSE)+
+      theme(panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_line("gray25"),
+            text = element_text(size = 12, family = "Arial"),
+            axis.text = element_text(size = 10, colour = "gray25"),
+            axis.title = element_text(size = 12, colour = "gray25"),
+            legend.key = element_blank())+
+      PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+      scale_alpha(range=c(0.6,1))
+
+ggsave("test.png", width = 8, height  = 6)
+```

@@ -23,6 +23,26 @@ library(tidyverse)
 load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
 ```
 
+```{r}
+cabo_stations <- c("COL_birds_48","COL_birds_49", "COL_birds_50", "COL_birds_58", "COL_birds_59",
+                   "COL_dscm_24", "COL_dscm_26",
+                   "COL_edna_077", "COL_edna_080","COL_edna_081", "COL_edna_082",
+                   "COL_meso_01", "COL_meso_02",
+                   "COL_pcam_23", "COL_pcam_25",
+                   "COL_sub_15", "COL_sub_16",
+                   "COL_uvs_03","COL_uvs_09", "COL_uvs_10", "COL_uvs_14", "COL_uvs_15", "COL_uvs_16",
+                   "COL_ysi_08","COL_ysi_13","COL_ysi_14","COL_ysi_18","COL_ysi_19","COL_ysi_20")
+
+utria_stations <- c("COL_birds_45", "COL_birds_46", "COL_birds_63", "COL_birds_64", "COL_birds_65", "COL_birds_66",
+                    "COL_birds_67", "COL_birds_68", "COL_birds_69",
+                    "COL_dscm_29", "COL_dscm_30","COL_dscm_31", "COL_dscm_32",
+                    "COL_edna_075", "COL_edna_076", "COL_edna_084", "COL_edna_085",
+                    "COL_pcam_27",
+                    "COL_sub_07", "COL_sub_18",
+                    "COL_uvs_06","COL_uvs_07", "COL_uvs_08", "COL_uvs_18", "COL_uvs_19", "COL_uvs_20",
+                    "COL_ysi_11","COL_ysi_12","COL_ysi_22","COL_ysi_23")
+```
+
 This file reads in all metadata files from the expedition, performs data quality control, and harmonizes all the different scientific methods into one master expedition metadata file. Method specific metadata is cleaned up, harmonized, and exported as well. Here we go. 
 
 # Compile expedition metadata
@@ -66,6 +86,14 @@ dscm_meta <- dscm_meta %>%
             extech_exp_id = expedition_id,
             notes = deployment_remarks,
             team_lead = "Whitney Goodell")
+
+
+dscm_meta <- dscm_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
 
 write_csv(dscm_meta, 
           file.path(ps_exp_path, "data", "primary", "processed/metadata", "dscm_meta.csv"))
@@ -122,6 +150,13 @@ sub_meta <- sub_meta %>%
                 therm_end_depth = therm_end, temp_at_max_depth = max_depth_temp,  deepsee_dive_number, 
                 observer_1, observer_2, pilot, dive_type) 
 
+sub_meta <- sub_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
+
 write_csv(sub_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "sub_meta.csv"))
 ```
 
@@ -154,17 +189,31 @@ pcam_meta <- pcam_meta %>%
                 lon_out = long_out, lat_out, depth_m, time_in,  time_out,
                 rig, left_cam, right_cam, bait, notes = comments, team_lead)
 
+pcam_meta <- pcam_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
+
 write_csv(pcam_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "pcam_meta.csv"))
 ```
 
 ## Mesophotic bruvs
 
 ```{r}
+meso_uwa_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                             "data/primary/raw",
+                                             "meso","Colombia_Mesophotic_Metadata_12102022.xlsx"), 
+                                   sheet = "Metadata") %>% 
+  janitor::clean_names() %>% 
+  dplyr::select(ps_station_id, analyzed_by = em_date, status, analyzed_on = em_date, analysis_comments)
+
 meso_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
                                          "data/primary/raw",
                                          "meso","_COL_meso_metadata.xlsx"), 
                                sheet = "Meso") %>% 
-  janitor::clean_names() 
+  janitor::clean_names()
 
 meso_meta <- meso_meta %>% 
   transmute(method = "Mesophotic BRUVS",
@@ -189,6 +238,16 @@ meso_meta <- meso_meta %>%
             cam_r,
             team_lead = "Molly Timmers",
             notes)
+
+meso_meta <- meso_meta %>% 
+  left_join(meso_uwa_meta)
+
+meso_meta <- meso_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
 
 write_csv(meso_meta, file.path(ps_exp_path,
                                "data", "primary", "processed/metadata", "meso_meta.csv"))
@@ -242,6 +301,13 @@ edna_meta <- edna_meta %>%
                                    paste(collection_time, "am"))) %>% 
   mutate(collection_time = hms::as_hms(lubridate::ymd_hms(paste(date, collection_time))))
 
+edna_meta <- edna_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
+
 write_csv(edna_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "edna_meta.csv"))
 ```
 
@@ -280,6 +346,13 @@ birds_meta <- birds_meta %>%
             drop_pickup, 
             vessel, 
             team_lead = "Chris Thompson")
+
+birds_meta <- birds_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
 
 write_csv(birds_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "birds_meta.csv"))
 ```
@@ -503,6 +576,13 @@ uvs_meta <- uvs_meta %>%
          method = "Scuba survey") %>% 
   dplyr::select(method, date, ps_station_id, ps_sample_id, sampling_method, location, sublocation, lat, lon, depth_m, time,  habitat, viz_m, diver, old_ps_station_id)
 
+uvs_meta <- uvs_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
+
 write_csv(uvs_meta, file.path(ps_exp_path, 
                               "data", "primary", "processed/metadata", "uvs_meta.csv"))
 ```
@@ -582,6 +662,12 @@ ysi_meta <- ysi_meta %>%
          time = hms::as_hms(time)) %>% 
   dplyr::select(method, date, ps_station_id, location, sublocation, lat, lon, time, max_depth_m, paired_station_id, method, team_lead = operator)
 
+ysi_meta <- ysi_meta %>% 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_station_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation))
 write_csv(ysi_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "ysi_meta.csv"))
 ```
 
@@ -667,7 +753,8 @@ write_csv(tags_sets_meta,
 ```{r}
 exp_meta <- bind_rows(
   uvs_meta %>% 
-    distinct(ps_station_id, ps_sample_id, method, date, location, sublocation, time, lat, lon, depth_m, 
+    distinct(ps_station_id, ps_sample_id, method, date, location, sublocation, time,
+             lat, lon, depth_m, 
              team_lead  = diver),
   tags_sets_meta %>% 
     filter(set_check_number == "Set") %>% 
@@ -701,37 +788,6 @@ exp_meta <- bind_rows(
 
 exp_meta <- exp_meta %>% 
   mutate(ps_sample_id = if_else(is.na(ps_sample_id), ps_station_id, ps_sample_id))
-```
-
-```{r}
-cabo_stations <- c("COL_birds_48","COL_birds_49", "COL_birds_50", "COL_birds_58", "COL_birds_59",
-                   "COL_dscm_24", "COL_dscm_26",
-                   "COL_edna_077", "COL_edna_080","COL_edna_081", "COL_edna_082",
-                   "COL_meso_01", "COL_meso_02",
-                   "COL_pcam_23", "COL_pcam_25",
-                   "COL_sub_15", "COL_sub_16",
-                   "COL_uvc_03","COL_uvc_09", "COL_uvc_10", "COL_uvc_14", "COL_uvc_15", "COL_uvc_16",
-                   "COL_ysi_08","COL_ysi_13","COL_ysi_14","COL_ysi_18","COL_ysi_19","COL_ysi_20")
-
-utria_stations <- c("COL_birds_45", "COL_birds_46", "COL_birds_63", "COL_birds_64", "COL_birds_65", "COL_birds_66",
-                    "COL_birds_67", "COL_birds_68", "COL_birds_69",
-                    "COL_dscm_29", "COL_dscm_30","COL_dscm_31", "COL_dscm_32",
-                    "COL_edna_075", "COL_edna_076", "COL_edna_084", "COL_edna_085",
-                    "COL_pcam_27",
-                    "COL_sub_07", "COL_sub_18",
-                    "COL_uvc_06","COL_uvc_07", "COL_uvc_08", "COL_uvc_18", "COL_uvc_19", "COL_uvc_20",
-                    "COL_ysi_11","COL_ysi_12","COL_ysi_22","COL_ysi_23")
-
-exp_meta <- exp_meta %>% 
-  mutate(sublocation = if_else(location == "Golfo de Tribuga",
-                               case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
-                                         ps_station_id %in% utria_stations ~ "PNN Utria",
-                                         TRUE ~ "DRMI"), 
-                               sublocation))
-
-exp_meta %>% 
-  group_by(location, sublocation, method) %>% 
-  summarize(n_distinct(ps_station_id))
 ```
 
 ```{r}

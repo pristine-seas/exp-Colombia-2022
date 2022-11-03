@@ -291,6 +291,7 @@ inverts_taxa <- bind_rows(inverts_taxa_caribe %>%
   distinct(method, location, taxon = species)
 ```
 
+
 ## Master list
 
 ```{r}
@@ -592,6 +593,20 @@ clean_master_taxa <- clean_master_taxa %>%
 
 clean_master_taxa %>%   
 write_csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv"))
+```
+
+
+```{r}
+clean_master_taxa <- read.csv(file.path(ps_exp_path, "data", "primary", "processed","taxa", "clean_master_taxa.csv"))
+
+meso_taxa <- read_csv(file.path(ps_exp_path, "data", "primary", "processed", "taxa", "meso_taxa.csv"))
+
+clean_master_taxa %>% 
+  filter(!method == "meso") %>% 
+  bind_rows(meso_taxa %>% 
+              mutate(method = "meso") %>% 
+              select(taxon_sci_name = taxon_valid_name, everything(), -status)) %>% 
+  filter(method == "meso") 
 ```
 
 ```{r}
