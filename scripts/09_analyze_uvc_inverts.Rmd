@@ -14,14 +14,18 @@ knitr::opts_knit$set(progress = TRUE, verbose = TRUE)
 
 options(dplyr.summarise.inform = FALSE)
 
+ps_data_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/"
+ps_exp_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/Colombia-2022/"
+
 library(sf)
 library(tidyverse)
 source("_prj_vars.R")
 load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
 
+
 uvc_meta <- read_csv(file.path(ps_exp_path, 
-                               "data", "primary", "processed", "metadata", "uvc_meta.csv")) %>% 
-  filter(method == "Inverts point contact", location == "Caribbean") %>% 
+                               "data", "primary", "processed", "metadata", "uvs_meta.csv")) %>% 
+  filter(method != "Point contact", location == "Caribbean") %>% 
   mutate(habitat = str_extract(habitat, "[^,]+"))
 
 uvc_taxa <- read_csv(file.path(ps_exp_path, 
@@ -79,7 +83,7 @@ hard_coral_presence_meta <- readxl::read_xlsx(file.path(ps_exp_path, "data", "pr
   as_tibble() %>% 
   set_names(c("SEA_station_number", "depth_m")) %>% 
   mutate(SEA_station_number = formatC(as.numeric(SEA_station_number), width = 2, flag = 0),
-         ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(SEA_station_number)))) 
+         ps_station_id = paste0("COL_uvs_", as.character(20 + as.numeric(SEA_station_number)))) 
 
 hard_coral_presence_meta <- hard_coral_presence_meta %>% 
   left_join(uvc_meta %>% 
@@ -129,7 +133,8 @@ pt_contacts_wide <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","
   t() %>% 
   as_tibble()
 
-pt_contacts_meta <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+pt_contacts_meta <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                                "data/primary/raw/inverts",
                             "SEA_contacts_fieldsheet_definitivo.xlsx"),
                   sheet = "Point intercept", n_max = 3, col_names = FALSE ) %>% 
   janitor::clean_names() %>% 
@@ -137,7 +142,7 @@ pt_contacts_meta <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","
   t() %>% 
   as_tibble() %>% 
   remove_rownames() %>% 
-  mutate(ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(station_number)))) %>% 
+  mutate(ps_station_id = paste0("COL_uvs_", as.character(20 + as.numeric(station_number)))) %>% 
   rename(SEA_station_number = station_number) 
 
 pt_contacts_meta <- pt_contacts_meta %>% 
@@ -368,10 +373,16 @@ serr_map <- p_cover_by_station_fg %>%
   left_join(uvc_meta %>% 
               distinct(ps_station_id, lat, lon)) %>% 
   filter(sublocation == "Serranilla") %>% 
+    mutate(habitat_sp = case_when(habitat == "deep platform, sponges and gorgonians" ~ "Terraza prearrecifal profunda",
+                                habitat %in% c("forereef, mixed coral, sponges, gorgonians", "forereef") ~ "Terraza prearrecifal",
+                                habitat == "island fringing reef" ~ "Arrecife periferico",
+                                habitat == "lagoon patch reef" ~ "Cuenca lagunar",
+                                habitat == "seagrass beds" ~ "Pastos marinos",
+                                TRUE ~ habitat)) %>% 
   sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   ggplot()+
   tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^8)+
-  geom_sf(aes(col = habitat, size = p_cover))+
+  geom_sf(aes(col = habitat_sp, size = p_cover))+
   coord_sf(xlim = c(-79.86, -79.82), ylim = c(15.785, 15.825))+
   ggspatial::annotation_scale(location = "bl", 
                               width_hint = 0.2, 
@@ -385,11 +396,11 @@ serr_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  PristineSeasR::scale_color_pristine_seas("alternative",
-                                           labels = c("Terraza arrecifal", 
-                                                      "Arrecife periferico",
-                                                      "Cuenca lagunar", 
-                                                      "Pastos marinos"))+
+  scale_color_manual(values = c("Arrecife periferico" = "#ed6a5a",
+                                "Cuenca lagunar" = "#f4f1bb",
+                                "Pastos marinos" = "#439775",
+                                "Terraza prearrecifal" = "#54c6eb",
+                                "Terraza prearrecifal profunda" = "#8a89c0"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Hábitat", size = "% Cobertura")+
@@ -415,10 +426,16 @@ bn_map <- p_cover_by_station_fg %>%
   left_join(uvc_meta %>% 
               distinct(ps_station_id, lat, lon)) %>% 
   filter(sublocation == "Bajo Nuevo") %>% 
+      mutate(habitat_sp = case_when(habitat == "deep platform" ~ "Terraza prearrecifal profunda",
+                                habitat %in% c("forereef, mixed coral, sponges, gorgonians", "forereef") ~ "Terraza prearrecifal",
+                                habitat == "island fringing reef" ~ "Arrecife periferico",
+                                habitat == "lagoon patch reef" ~ "Cuenca lagunar",
+                                habitat == "seagrass beds" ~ "Pastos marinos",
+                                TRUE ~ habitat)) %>% 
   sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   ggplot()+
   tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^8)+
-  geom_sf(aes(col = habitat, size = p_cover))+
+  geom_sf(aes(col = habitat_sp, size = p_cover))+
   coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
   ggspatial::annotation_scale(location = "bl", 
                               width_hint = 0.2, 
@@ -432,18 +449,17 @@ bn_map <- p_cover_by_station_fg %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  PristineSeasR::scale_color_pristine_seas(palette = "alternative",
-                                     labels = c("Terraza prearrecifal profunda", 
-                                                "Terraza prearrecifal", "Cuenca lagunar"))+
+  scale_color_manual(values = c("Arrecife periferico" = "#ed6a5a",
+                                "Cuenca lagunar" = "#f4f1bb",
+                                "Pastos marinos" = "#439775",
+                                "Terraza prearrecifal" = "#54c6eb",
+                                "Terraza prearrecifal profunda" = "#8a89c0"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Hábitat", size = "% Cobertura")+
     guides(size=guide_legend(override.aes=list(colour="grey")))+
   theme(legend.background = element_blank(),
         legend.position = "right",
-        # legend.box = 'vertical',
-        # legend.justification = 'left',
-        # legend.box.just = 'left',
         legend.key = element_blank(),
         legend.text = element_text(colour = "black"), 
         panel.background  = element_rect(fill ="#1b2b49"),
@@ -644,7 +660,8 @@ anova(sessile_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. v
 # Vagile Inverts
 
 ```{r}
-n_ind_vagile_wide <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+n_ind_vagile_wide <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                                 "data", "primary","raw", "inverts",
                                                   "SEA_contacts_fieldsheet_definitivo.xlsx"),
                                         sheet = "vagile inverts", n_max = 20, col_names = FALSE,
                   skip = 2) %>% 
@@ -662,7 +679,7 @@ n_ind_vagile_meta <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary",
   as_tibble() %>% 
   set_names(c("SEA_station_number", "depth_m")) %>% 
   mutate(SEA_station_number = formatC(as.numeric(SEA_station_number), width = 2, flag = 0),
-         ps_station_id = paste0("COL_uvc_", as.character(20 + as.numeric(SEA_station_number)))) %>% 
+         ps_station_id = paste0("COL_uvs_", as.character(20 + as.numeric(SEA_station_number)))) %>% 
   left_join(uvc_meta %>% 
               filter(location == "Caribbean") %>% 
               distinct(ps_station_id, sublocation, habitat, lat, lon))
@@ -739,8 +756,8 @@ n_ind_vagile_long %>%
   pivot_longer(-c(sublocation, taxon)) %>% 
   pivot_wider(names_from = c(sublocation, name), values_from = value) %>% 
   flextable::flextable() %>% 
-  flextable::add_header_row(values = c("", "Bajo Nuevo", "Serranilla"), 
-                            colwidths = c(1,2,2)) %>% 
+  # flextable::add_header_row(values = c("", "Bajo Nuevo", "Serranilla"), 
+  #                           colwidths = c(1,2,2)) %>% 
   flextable::merge_v(j = "family") %>% 
   flextable::autofit(part = "all") %>%
   flextable::align(align = "center", part = "all")

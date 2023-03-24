@@ -29,6 +29,9 @@ library(tidyverse)
 
 source("_prj_vars.R")
 
+
+ps_data_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/"
+ps_exp_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/Colombia-2022/"
 load(file = file.path(ps_exp_path, 
                       "data", "secondary", "processed", "admin_spatial_layers.RData"))
 ```
@@ -534,7 +537,8 @@ st_write(sar_detections,
 ## Map detections
 
 ```{r}
-sar_detections <- read_rds(file.path(ps_exp_path, "data", "secondary", "processed","gfw_sar_detects.rds"))
+sar_detections <- read_rds(file.path(ps_exp_path, 
+                                     "data", "secondary", "processed","gfw_sar_detects.rds"))
 ```
 
 ### Pacific
@@ -778,10 +782,11 @@ ggsave(ser_sar_zoom,
 ```{r}
 monthly_pattenrs <- sar_detections %>% 
   filter(nombre %in% c("Serranilla", "Bajo Nuevo")) %>%
-  mutate(month = lubridate::month(date, label = T)) %>% 
+  mutate(month = clock::date_month_factor(date, 
+                                          labels = "es", 
+                                          abbreviate = TRUE)) %>% 
   group_by(nombre, month) %>% 
   summarise(n_detections = n_distinct(detect_id)) 
-  #pivot_wider(names_from = nombre, values_from = n_detections)
 ```
 
 ```{r}

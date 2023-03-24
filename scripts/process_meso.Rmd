@@ -23,6 +23,9 @@ library(vegan)
 library(tidyverse)
 load(file = file.path(ps_exp_path, 
                       "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+ps_data_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/"
+ps_exp_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/Colombia-2022/"
 ```
 
 ```{r}
@@ -252,6 +255,7 @@ summary_maxN %>%
   summarize(n_distinct(taxon[sum_MaxN > 0]),
             n_distinct(family[sum_MaxN > 0]))
 ```
+
 ```{r}
 summary_maxN %>% 
   filter(sublocation != "Golfo de Tribuga") %>% 
@@ -303,7 +307,8 @@ write_csv(meso_biomass,
 ```
 
 ```{r}
-meso_biomass
+meso_biomass <- read_csv(file.path(ps_exp_path, 
+                                   "data", "primary", "processed/analyses", "meso_biomass.csv"))
 ```
 
 ```{r}
@@ -319,7 +324,8 @@ biomass_by_station %>%
   group_by(sublocation) %>% 
   summarize(mean(biomass_gr),
             median(biomass_gr))
-
+```
+```{r}
 biomass_by_station %>% 
   ggplot(aes(x = sublocation, y = biomass_gr))+
   geom_violin(aes(fill = sublocation, 
@@ -333,6 +339,56 @@ biomass_by_station %>%
     maxwidth = .5, scale = "count", 
     size = 3, alpha = .5, seed = 0
   )
+```
+
+
+```{r}
+meso_biomass %>% 
+  left_join(meso_taxa) %>%  
+  group_by(ps_station_id, family) %>% 
+  summarize(total_biomass = sum(biomass_gr)) %>% 
+  left_join(meso_meta %>% 
+              select(sublocation, ps_station_id)) %>% 
+  ungroup() %>% 
+  group_by(sublocation, family) %>% 
+  summarise(mean_biomass = mean(total_biomass)) %>% 
+  ggplot()+
+  geom_col(aes(x = sublocation, y = mean_biomass, fill = family))+
+  scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  coord_flip()+
+    labs(y = "", x = "")+
+  bbplot::bbc_style()+
+  theme(legend.position = "bottom")+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))
+
+ggsave(filename = file.path(ps_exp_path, 
+                            "figures", "meso_avg_biomass_by_family_and_location_v2.png"),
+       width = 13, height = 8)
+```
+
+```{r}
+meso_biomass %>% 
+  left_join(meso_taxa) %>%  
+  group_by(ps_station_id, family) %>% 
+  summarize(total_biomass = sum(biomass_gr)) %>% 
+  left_join(meso_meta %>% 
+              select(sublocation, ps_station_id)) %>% 
+  View()
+  ungroup() %>% 
+  group_by(sublocation, family) %>% 
+  summarise(mean_biomass = mean(total_biomass)) %>% 
+  ggplot()+
+  geom_col(aes(x = family, y = mean_biomass, fill = sublocation), 
+           position = "dodge")+
+  PristineSeasR::scale_fill_pristine_seas(palette = "alternative")+
+  # scale_fill_manual(values = colorRampPalette(RColorBrewer::brewer.pal(12, "Set3"))(24))+
+  coord_flip()+
+  labs(y = "Biomasa promedio (gr/m2)", x = "")+
+  #bbplot::bbc_style()+
+  theme(legend.position = "bottom")+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))
+
+ggsave("t2.png")
 ```
 
 ```{r}
@@ -349,8 +405,8 @@ vegan::adonis2(tmp %>%
 
 ```{r}
 meso_biomas_by_taxa <- meso_biomass %>% 
-  left_join(meso_meta) %>% 
-  left_join(meso_taxa) %>% 
+  left_join(meso_taxa) %>%
+  left_join(meso_meta %>% select(-status)) %>% 
   group_by(sublocation, taxon, family) %>% 
   summarise(biomass_gr = mean(biomass_gr),
             n= n_distinct(ps_station_id[biomass_gr>0])) %>%
@@ -358,10 +414,18 @@ meso_biomas_by_taxa <- meso_biomass %>%
 
 meso_biomas_by_taxa %>% 
   filter(n > 0) %>% 
-  ggplot(aes(x = family, y = biomass_gr, fill = sublocation))+
-  geom_boxplot() +
-  coord_flip()
+  ggplot(aes(x = family, y = log(biomass_gr), fill = sublocation))+
+  geom_boxplot(size = 0.1) +
+  coord_flip()+
+  #bbplot::bbc_style()+
+  theme(legend.position = "top")+
+  guides(fill = guide_legend(nrow=5,byrow=TRUE))
   
+ggsave("test.png")
+
+ggsave(filename = file.path(ps_exp_path, 
+                            "figures", "meso_avg_biomass_by_family_and_location.png"),
+       width = 13, height = 8)
 ```
 
 ```{r}

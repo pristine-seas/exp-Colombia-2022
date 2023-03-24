@@ -1,0 +1,188 @@
+---
+title: "Process uvs - inverts"
+author: "*Compiled on `r date()` by `r Sys.info()['user']`*"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_depth: 1
+    toc_float: yes
+    number_sections: false
+    theme: cerulean
+    highlight: haddock
+---
+
+```{r}
+ps_data_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/"
+ps_exp_path <- "~/Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/Colombia-2022/"
+
+
+library(raster)
+library(sf)
+library(ggspatial)
+library(lubridate)
+library(bdc)
+source("_prj_vars.R")
+library(vegan)
+library(tidyverse)
+
+load(file = file.path(ps_exp_path, "data", "secondary", "processed", "admin_spatial_layers.RData"))
+
+uvs_meta <- read_csv(file.path(ps_exp_path, 
+                               "data/primary/processed/metadata", 
+                               "uvs_meta.csv")) %>%
+  filter(!str_detect(ps_sample_id,"fish"))
+```
+
+
+# Clean data
+
+## Point contacts 
+
+```{r points}
+pts_transects_caribe <- readxl::read_xlsx(file.path(ps_exp_path, 
+                                                "data/primary/raw/inverts",
+                            "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                  sheet = "Point intercept", n_max = 3, col_names = FALSE ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  mutate(depth_m = as.numeric(depth_m),
+         ps_station_id = paste0("COL_uvs_", as.character(20 + as.numeric(station_number))),
+         ps_sample_id = paste(ps_station_id, "point", "KB",paste0(depth_m, "m"),sep = "_"),
+         ps_transect_id = paste(ps_sample_id, subtransect, sep = "_")) %>% 
+  select(ps_sample_id, ps_station_id, ps_transect_id, transect = subtransect, depth_m,  -station_number)
+
+pts_transects_tribuga <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                            "COL_contacts_fieldsheet.xlsx"),
+                  sheet = "data", n_max = 3, col_names = FALSE ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  mutate(depth_m = as.numeric(depth_m),
+         ps_station_id = paste0("COL_uvs_", station_number),
+         ps_sample_id = paste(ps_station_id, "point", "KB",paste0(depth_m, "m"),sep = "_"),
+         ps_transect_id = paste(ps_sample_id, subtransect, sep = "_")) %>% 
+  select(ps_sample_id, ps_station_id, ps_transect_id, transect = subtransect, depth_m,  -station_number)
+
+pts_transects_tribuga %>% 
+  bind_rows(pts_transects_caribe) %>% 
+  anti_join(uvs_meta)
+
+pts_transects <- pts_transects_tribuga %>% 
+  bind_rows(pts_transects_caribe)
+
+pts_transects <- pts_transects %>% 
+  mutate(depth_strata = cut(depth_m, breaks = c(0, 14.9, Inf), labels = c("S", "D"))) %>% 
+  select(ps_transect_id, ps_sample_id, depth_m, depth_strata, transect) %>% 
+  left_join(uvs_meta %>% 
+              select(ps_sample_id, location, ps_station_id, sublocation, habitat, diver)) %>% 
+  select(ps_transect_id, ps_sample_id, ps_station_id, sublocation, location,
+         diver, depth_m, depth_strata, habitat)
+```
+
+```{r}
+pts_caribe <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "Point intercept", 
+                                      n_max = 144, col_names = FALSE, skip = 4 ) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+pts_tribuga <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "COL_contacts_fieldsheet.xlsx"),
+                                        sheet = "data", 
+                                      n_max = 51, col_names = FALSE, skip = 4) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+pts <- bind_rows(pts_tribuga, pts_caribe)
+
+rownames(pts) <- pts_transects$ps_transect_id
+
+pts <- cbind(ps_transect_id = pts_transects$ps_transect_id, 
+      pts) %>% 
+  pivot_longer(!ps_transect_id,  
+               names_to = "taxon", 
+               values_to = "n_pts") %>% 
+  replace_na(list(n_pts = 0))
+
+pts %>% 
+  group_by(ps_transect_id) %>% 
+  summarize(n_distinct(taxon),
+            sum(n_pts)) 
+  
+pts <- pts %>% 
+  left_join(pts_transects) %>% 
+  select(ps_sample_id, ps_transect_id, taxon, n_pts)
+
+write_csv(pts,
+          file.path(ps_exp_path,
+                    "data/primary/processed/analyses",
+                    "uvs_points.csv"))
+```
+
+# Hard coral cover
+
+```{r}
+hard_coral_presence_wide <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "Hard corals + Palythoa", n_max = 38, col_names = FALSE,
+                  skip = 3) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1")  %>% 
+  t() %>% 
+  as_tibble()
+
+n_ind_vagile_wide <- readxl::read_xlsx(file.path(ps_exp_path, "data", "primary","raw", "inverts",
+                                                  "SEA_contacts_fieldsheet_definitivo.xlsx"),
+                                        sheet = "vagile inverts", n_max = 20, col_names = FALSE,
+                  skip = 2) %>% 
+  janitor::clean_names() %>% 
+  column_to_rownames(var = "x1")  %>% 
+  t() %>% 
+  as_tibble()
+```
+
+# Clean taxa
+
+```{r}
+inverts_taxa_pacific <- readxl::read_excel(file.path(ps_exp_path, 
+                                        "data", "primary","raw","inverts","COL_contacts_fieldsheet.xlsx"), 
+                               sheet = "All species") %>% 
+  janitor::clean_names()
+
+inverts_taxa_caribe <- readxl::read_excel(file.path(ps_exp_path, 
+                                        "data", "primary","raw","inverts","SEA_contacts_fieldsheet_definitivo.xlsx"), 
+                               sheet = "All species") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(species))
+
+inverts_taxa <- bind_rows(inverts_taxa_caribe %>% 
+                            distinct(species, category) %>% 
+                            mutate(location = "Caribbean"), 
+                          inverts_taxa_pacific %>% 
+                            distinct(species, category) %>% 
+                            mutate(location = "Golfo de Tribuga"))%>% 
+  distinct() %>% 
+  mutate(across(!location, str_to_sentence)) %>% 
+  distinct(location, taxon = species, category)
+```
+
+```{r}
+observed_taxa <- unique(c(names(pt_contacts_wide[ ,colSums(pt_contacts_wide, na.rm = T) > 0]),
+                          names(n_ind_vagile_wide[ ,colSums(n_ind_vagile_wide, na.rm = T) > 0]),
+                          names(hard_coral_presence_wide[ ,colSums(hard_coral_presence_wide, na.rm = T) > 0])))
+
+inverts_taxa %>% 
+  filter(!taxon %in% observed_taxa)
+```
+

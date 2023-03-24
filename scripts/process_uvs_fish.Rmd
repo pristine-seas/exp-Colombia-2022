@@ -233,6 +233,9 @@ fish_taxa <- read_csv(file.path(ps_exp_path, "data", "primary", "processed", "ta
 uvs_meta <-  read_csv(file.path(ps_exp_path, "data", "primary", "processed/metadata", "uvs_meta.csv")) %>%
   filter(str_detect(ps_sample_id,"fish")) 
 
+uvs_meta <- uvs_meta %>% 
+  mutate(depth_strata = cut(depth_m, breaks = c(0, 14.9, Inf), labels = c("S", "D")))
+
 caribe_obs <- readxl::read_xlsx(file.path(ps_exp_path, 
                                           "data", "primary","raw", "fish", "SEA_fish_final.xlsx"))
 
@@ -262,7 +265,8 @@ fish_obs <- caribe_obs %>%
                                        diver == "Withney Goodell" ~ "WG",
                                        diver == "Nacor Bolaños"~"NBC",
                                        TRUE ~ diver)) %>% 
-              distinct(ps_station_id, diver, location, sublocation, depth_m, ps_sample_id, habitat)) %>%
+              distinct(ps_station_id, diver, location, sublocation, 
+                       depth_m, ps_sample_id, habitat)) %>%
   mutate(ps_transect_id = paste(ps_sample_id, transect, sep = "_"),
          avg_length = (min_length + min_length)/2,
          depth_strata = cut(depth_m, breaks = c(0, 14.9, Inf), labels = c("S", "D")))
@@ -353,17 +357,13 @@ biomass_by_taxa_and_transect <- biomass_by_taxa_and_transect %>%
   mutate(across(c(n_ind, ind_m2, biomass_gr, gr_m2), .fns = ~replace_na(.,0))) %>% 
   mutate_if(is.numeric, round, 4)
 
-write_csv(biomass_by_taxa_and_transect,
-          file.path(ps_exp_path,
-                    "data/primary/processed/analyses",
-                    "uvs_fish_biomass_by_transect.csv"))
-
-fish_transects %>% 
-  select(ps_transect_id, ps_sample_id, sublocation, location,
-         diver, depth_m, depth_strata) %>%
+biomass_by_taxa_and_transect %>% 
+  left_join(fish_transects %>% 
+              select(ps_sample_id, ps_transect_id)) %>% 
+  select(ps_sample_id, ps_transect_id, everything()) %>% 
   write_csv(file.path(ps_exp_path,
                       "data/primary/processed/analyses",
-                      "uvs_fish_transects.csv"))
+                      "uvs_fish_biomass_by_transect.csv"))
 ```
 
 # Analyses
@@ -386,10 +386,6 @@ uvs_meta <- uvs_meta %>%
                                 habitat == "seagrass beds" ~ "Pastos marinos",
                                 TRUE ~ habitat))
 
-fish_transects <- read_csv(file.path(ps_exp_path,
-                                     "data/primary/processed/analyses",
-                                     "uvs_fish_transects.csv"))
-
 biomass_by_taxa_and_transect <- read_csv(file.path(ps_exp_path,
                                                    "data/primary/processed/analyses",
                                                    "uvs_fish_biomass_by_transect.csv"))
@@ -397,7 +393,7 @@ biomass_by_taxa_and_transect <- read_csv(file.path(ps_exp_path,
 
 ```{r transect_summary}
 transect_summary <- biomass_by_taxa_and_transect %>% 
-  group_by(location, ps_transect_id) %>% 
+  group_by(location, ps_sample_id, ps_transect_id) %>% 
   summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
             n_ind = sum(n_ind),
             ind_m2 = sum(ind_m2),
@@ -424,9 +420,8 @@ transect_summary <- transect_summary %>%
 
 ```{r station_summary}
 station_summary <- transect_summary %>% 
-  left_join(fish_transects) %>% 
   left_join(uvs_meta %>% 
-              dplyr::select(ps_sample_id, ps_station_id, habitat = habitat_sp)) %>% 
+              dplyr::select(sublocation, ps_sample_id, ps_station_id, habitat = habitat_sp)) %>% 
   group_by(sublocation, habitat, ps_station_id) %>% 
   summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2, H), mean)) %>% 
   ungroup() %>% 
@@ -438,13 +433,42 @@ station_summary %>%
   group_by(sublocation) %>% 
   summarize(across(c(richness = n_taxa, n_ind, ind_m2, gr_m2, H), mean)) %>% 
   left_join(biomass_by_taxa_and_transect %>% 
-              left_join(fish_transects) %>% 
+              left_join(uvs_meta) %>% 
               left_join(fish_taxa %>% 
                           distinct(location, taxon_valid_name, family)) %>% 
               group_by(sublocation) %>% 
               summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
                         n_families = n_distinct(family[n_ind > 0])))
 ```
+
+```{r taxa_station}
+biomass_by_taxa_and_station <- biomass_by_taxa_and_transect %>% 
+  left_join(uvs_meta %>% 
+              dplyr::select(ps_sample_id, ps_station_id, sublocation)) %>% 
+  group_by(sublocation, ps_station_id, taxon_valid_name) %>% 
+  summarize(n_ind = mean(n_ind, na.rm = T),
+            ind_m2 = mean(ind_m2, na.rm = T),
+            gr_m2 = mean(gr_m2, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(ps_station_id) %>% 
+  mutate(f_n_ind = n_ind/sum(n_ind),
+         f_ind_m2 = ind_m2/sum(ind_m2),
+         f_gr_m2 = gr_m2/sum(gr_m2)) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  dplyr::select(sublocation, ps_station_id, taxon_valid_name, 
+         n_ind, f_n_ind, ind_m2, f_ind_m2, gr_m2, f_gr_m2)
+
+biomass_by_taxa_and_station %>% 
+  group_by(sublocation, taxon_valid_name) %>%
+  summarize(across(c(n_ind, ind_m2, gr_m2), mean)) %>% 
+  ungroup() %>% 
+  filter(n_ind > 0) %>% 
+  group_by(sublocation) %>% 
+  slice_max(n = 10, order_by = gr_m2)
+  
+```
+
 ## Maps of biomass 
 
 ```{r}
@@ -474,8 +498,8 @@ serr_map <- station_summary %>%
   sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   ggplot()+
   tidyterra::geom_spatraster_rgb(data = serr_sat_img, maxcell = 10^7)+
-  geom_sf(aes(col = habitat, size = gr_m2))+
-  geom_sf(aes(size = gr_m2), color=alpha("white",.1))+
+  geom_sf(aes(col = habitat, size = gr_m2), alpha = 0.85)+
+  geom_sf(aes(size = gr_m2), color = alpha("white",.05))+
   coord_sf(xlim = c(-79.86, -79.82), ylim = c(15.785, 15.825))+
   ggspatial::annotation_scale(location = "bl", 
                               width_hint = 0.2, 
@@ -489,7 +513,12 @@ serr_map <- station_summary %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+  #PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+  scale_color_manual(values = c("Arrecife periferico" = "#ed6a5a",
+                                "Cuenca lagunar" = "#f4f1bb",
+                                "Pastos marinos" = "#439775", 
+                                "Terraza prearrecifal" = "#54c6eb",
+                                "Terraza prearrecifal profunda" = "#8a89c0"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Habitat", size = bquote('Biomasa '(g/m^2)))+
@@ -515,7 +544,7 @@ bn_map <- station_summary %>%
   sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
   ggplot()+
   tidyterra::geom_spatraster_rgb(data = bn_sat_img, maxcell = 10^7)+
-  geom_sf(aes(col = habitat, size = gr_m2))+
+  geom_sf(aes(col = habitat, size = gr_m2), alpha = 0.8)+
   geom_sf(aes(size = gr_m2), color=alpha("white",.1))+
   coord_sf(xlim = c(-78.8, -78.5), ylim = c(15.75, 15.95))+
   ggspatial::annotation_scale(location = "bl", 
@@ -530,7 +559,11 @@ bn_map <- station_summary %>%
                                     height = unit(0.1, "native"), width = unit(0.1, "native"),
                                     pad_x = unit(0.01, "native"), pad_y = unit(0.01, "native"),
                                     style = ggspatial::north_arrow_fancy_orienteering)+
-  PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+  scale_color_manual(values = c("Arrecife periferico" = "#ed6a5a",
+                                "Cuenca lagunar" = "#f4f1bb",
+                                "Pastos marinos" = "#439775", 
+                                "Terraza prearrecifal" = "#54c6eb",
+                                "Terraza prearrecifal profunda" = "#8a89c0"))+
   scale_shape_manual(values= seq(100:110))+
   theme_light()+
   labs(col = "Habitat", size = bquote('Biomasa'(g/m^2)))+
@@ -549,31 +582,13 @@ ggsave(bn_map,
        filename = file.path(ps_exp_path, "figures", "bajo_nuevo_fish_biomass_map_spanish.png"), 
        dpi = 300, width = 8, height = 4)
 ```
-```{r taxa_station}
-biomass_by_taxa_and_station <- biomass_by_taxa_and_transect %>% 
-  left_join(fish_transects) %>% 
-  left_join(uvs_meta %>% 
-              dplyr::select(ps_sample_id, ps_station_id)) %>% 
-  group_by(sublocation, ps_station_id, taxon_valid_name) %>% 
-  summarize(n_ind = mean(n_ind, na.rm = T),
-            ind_m2 = mean(ind_m2, na.rm = T),
-            gr_m2 = mean(gr_m2, na.rm = T)) %>% 
-  ungroup() %>% 
-  group_by(ps_station_id) %>% 
-  mutate(f_n_ind = n_ind/sum(n_ind),
-         f_ind_m2 = ind_m2/sum(ind_m2),
-         f_gr_m2 = gr_m2/sum(gr_m2)) %>% 
-  ungroup() %>% 
-  mutate_if(is.numeric, round, 3) %>% 
-  dplyr::select(sublocation, ps_station_id, taxon_valid_name, 
-         n_ind, f_n_ind, ind_m2, f_ind_m2, gr_m2, f_gr_m2)
-```
+
 
 ## Is diver and depth important?
 
 ```{r}
 transect_summary %>% 
-  left_join(fish_transects) %>% 
+  left_join(uvs_meta) %>% 
   ggplot(aes(y = ind_m2, x = sublocation, col = diver, fill = diver)) +
   geom_boxplot( fill = "white",outlier.shape = NA)+
   facet_wrap("location", scales = "free")+
@@ -581,16 +596,17 @@ transect_summary %>%
   PristineSeasR::scale_color_pristine_seas(palette = "alternative")
 
 transect_summary %>% 
-  left_join(fish_transects) %>% 
+  left_join(uvs_meta) %>% 
   ggplot(aes(y = gr_m2, x = sublocation, col = diver, fill = diver)) +
   geom_boxplot( fill = "white")+
   facet_wrap("location", scales = "free")+
   labs(title = "Biomass (gr/m2) per transect", y = "", x = "")+
   PristineSeasR::scale_color_pristine_seas(palette = "alternative")
 ```
+
 ```{r}
 transect_summary %>% 
-  left_join(fish_transects) %>% 
+  left_join(uvs_meta) %>% 
   ggplot(aes(y = ind_m2, x = sublocation, col = depth_strata, fill = depth_strata)) +
   geom_boxplot( fill = "white",outlier.shape = NA)+
   facet_wrap("location", scales = "free")+
@@ -598,7 +614,7 @@ transect_summary %>%
   PristineSeasR::scale_color_pristine_seas(palette = "alternative")
 
 transect_summary %>% 
-  left_join(fish_transects) %>% 
+  left_join(uvs_meta) %>% 
   ggplot(aes(y = gr_m2, x = sublocation, col = depth_strata, fill = depth_strata)) +
   geom_boxplot( fill = "white")+
   facet_wrap("location", scales = "free")+
@@ -608,7 +624,7 @@ transect_summary %>%
 
 ```{r}
 transect_summary %>% 
-  left_join(fish_transects) %>% 
+  left_join(uvs_meta) %>% 
   group_by(location, depth_strata) %>% 
   summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2, H), mean))
 ```

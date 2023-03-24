@@ -81,6 +81,136 @@ tags_meta %>%
   flextable::align(align = "center", part = "all")
 ```
 
+# Analyze Argos data
+
+```{r}
+argos_data <- list.files(path = file.path(ps_exp_path, "data/primary/raw/tags/Argos-GPE3/"),
+                         pattern = "*-2-GPE3.csv",
+                         full.names = T, recursive = T) %>%  
+  purrr::map(read.csv, skip = 5, header = T) %>% 
+  dplyr::bind_rows() %>% 
+  janitor::clean_names()
+```
+
+```{r}
+argos_data <- argos_data %>% 
+  mutate(datetime = dmy_hms(date),
+         date = date(datetime),
+         lat = most_likely_latitude,
+         lon = most_likely_longitude) 
+
+argos_data <- argos_data %>%
+  group_by(ptt, date) %>%
+  filter(observation_score == max(observation_score, na.rm = T))
+  slice_max(observation_score, n = 1)
+
+argos_data <- argos_data %>% 
+  left_join(tags_capture %>% 
+              filter(!is.na(sat_tag_number)) %>% 
+              select(species, ptt = sat_tag_number)) 
+
+argos_data %>% 
+  group_by(ptt, species) %>% 
+  summarize(n_days = n_distinct(date),
+            n_msgs = n(),
+            max_depth = max(observed_depth, na.rm = T)) 
+```
+
+```{r}
+argos_data %>% 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) %>% 
+  group_by(ptt) %>% 
+  arrange(desc(datetime)) %>% 
+  summarise(do_union = FALSE) %>%
+  st_cast("LINESTRING") %>% 
+  mutate(track_length_km= as.numeric(st_length(geometry)/1000))
+```
+
+
+```{r}
+argos_data %>% 
+  mutate(ptt = as.factor(ptt)) %>% 
+  group_by(ptt) %>% 
+  arrange(datetime) %>% 
+  filter(observed_depth > 0) %>% 
+  ggplot()+
+  geom_jitter(aes(x =datetime, y = observed_depth, col = ptt))
+```
+
+#  
+
+```{r}
+library(basemaps)
+
+tag_id <- 209103
+
+ext <- argos_data %>% 
+            filter(ptt == tag_id) %>% 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) %>%
+  st_buffer(dist = 60000) %>% 
+  st_bbox() 
+
+caribe_basemap <- ggplot() + 
+  basemap_gglayer(ext, map_service = "esri", 
+                  map_type = "world_imagery") +
+  scale_fill_identity() +
+  coord_sf()
+
+track <- argos_data %>%
+  filter(ptt == tag_id) %>% 
+  arrange(datetime) %>% 
+  mutate(ping_number = scales::rescale(row_number())) %>% 
+  filter(!is.na(lon)) %>% 
+  left_join(tags_capture %>% 
+              filter(!is.na(sat_tag_number)) %>% 
+              select(species, ptt = sat_tag_number)) %>% 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) %>% 
+  sf::st_transform(crs = 3857) %>% 
+  mutate(shark_id = paste(species, paste0("(", ptt, ")")))
+
+track_line <- track %>% 
+  summarise(do_union = FALSE) %>%
+  st_cast("LINESTRING")
+
+plot(track %>% 
+  summarise(do_union = FALSE))
+
+caribe_basemap +
+  geom_sf(data = track ,
+          aes(col = ping_number,
+              shape = shark_id),
+          alpha = 0.8)+
+  geom_sf(data = track_line,
+          col = "white")+
+  geom_sf(data = st_transform(bajos_eez %>% 
+                                filter(territory1 == "Serranilla Bank"), crs = 4326), 
+          size = .5, fill = "transparent", col = "orange")+
+  paletteer::scale_color_paletteer_c(palette = "ggthemes::Blue-Green Sequential",
+                                     direction = 1,
+                                     name = NULL,
+                                     labels = c("Start", "", "", "","End"))+
+  scale_shape_discrete(solid = F)+
+  scale_x_continuous(expand = c(0, 0))+
+  scale_y_continuous(expand = c(0, 0))+
+  labs(y = "",
+       x = "",
+       shape = "")+
+  theme_light()+
+  theme(legend.position = "bottom",
+        legend.box = 'horizontal',
+        legend.direction = 'horizontal',
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        legend.text = element_text(colour = "black"),
+        panel.background  = element_rect(fill ="white"),
+        panel.grid = element_blank(),
+        panel.border = element_blank())+
+  guides(shape=guide_legend(nrow=2,byrow=TRUE))
+
+ggsave(paste0("shark_track_", tag_id,".png"), dpi = 300, width = 11)
+
+```
+
 
 
 
