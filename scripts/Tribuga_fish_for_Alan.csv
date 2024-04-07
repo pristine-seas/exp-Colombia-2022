@@ -1,0 +1,85 @@
+taxon_valid_name,freq_obs,ind_m2,gr_m2,common_name_spa,family
+Paranthias colonus,95,1.3241,38.5837,Sandía,Serranidae
+Haemulon maculicauda,70,0.1797,11.8046,Burro rasposo,Haemulidae
+Chromis atrilobata,100,5,9.9111,Castañeta cola de tijera,Pomacentridae
+Caranx caballus,20,0.0194,8.1936,Jurel bonito,Carangidae
+Lutjanus argentimaculatus,85,0.0347,7.7681,NA,Lutjanidae
+Haemulon steindachneri,30,0.0553,5.913,Burro latino,Haemulidae
+Cephalopholis panamensis,90,0.0413,4.545,Cabrilla enjambre,Serranidae
+Epinephelus labriformis,95,0.0325,4.2873,Cabrilla piedrera,Serranidae
+Holacanthus passer,95,0.0504,4.2034,Ángel real,Pomacanthidae
+Epinephelus quinquefasciatus,5,1e-4,3.4901,NA,Serranidae
+Lutjanus guttatus,45,0.0606,3.3955,Pargo lunarejo,Lutjanidae
+Mulloidichthys dentatus,30,0.0315,3.335,Chivo barbón,Mullidae
+Sufflamen verres,100,0.0608,3.2301,Cochito naranja,Balistidae
+Kyphosus ocyurus,10,0.0064,3.0892,NA,Kyphosidae
+Apogon pacificus,70,2.748,2.6905,Cardenal morro listado,Apogonidae
+Myripristis leiognathus,80,0.0698,2.6778,Soldado panámico,Holocentridae
+Seriola rivoliana,15,0.0018,2.2611,Medregal limón;Medregal limón,Carangidae
+Pseudobalistes naufragium,35,8e-4,2.0829,Cochito bota,Balistidae
+Scarus perrico,30,6e-4,1.8959,Loro jorobado,Scaridae
+Arothron meleagris,60,0.0115,1.842,Botete aletas punteadas,Tetraodontidae
+Bodianus diplotaenia,95,0.1185,1.6392,Vieja mexicana,Labridae
+Acanthurus xanthopterus,55,0.0111,1.3525,Cirujano aleta amarilla,Acanthuridae
+Johnrandallia nigrirostris,95,0.0644,1.3229,Mariposa barbero,Chaetodontidae
+Scarus rubroviolaceus,30,0.0021,1.3222,Loro bicolor,Scaridae
+Arothron hispidus,45,0.0075,1.2587,Botete panza rayada,Tetraodontidae
+Gymnothorax castaneus,35,9e-4,1.2121,Morena verde panámica,Muraenidae
+Abudefduf troschelii,30,0.0304,1.1943,Petaca banderita,Pomacentridae
+Stegastes flavilatus,90,0.1293,1.1303,Jaqueta de dos colores,Pomacentridae
+Thalassoma lucasanum,90,0.452,0.9817,Arcoiris de cortés,Labridae
+Microspathodon dorsalis,45,0.0083,0.653,Jaqueta gigante,Pomacentridae
+Odontoscion xanthops,10,0.0065,0.5931,Corvineta ojiamarillo,Sciaenidae
+Halichoeres dispilus,95,0.5607,0.5683,Señorita camaleón,Labridae
+Gnathanodon speciosus,10,9e-4,0.5666,Jurel dorado,Carangidae
+Scarus ghobban,15,0.0045,0.5353,Loro barbazul,Scaridae
+Halichoeres nicholsi,70,0.0182,0.4832,Señorita solterona,Labridae
+Apogon,55,1.5571,0.4678,NA,Apogonidae
+Lutjanus novemfasciatus,5,5e-4,0.4336,Pargo prieto,Lutjanidae
+Pomacanthus zonipectus,35,0.0025,0.3328,Ángel de cortés,Pomacanthidae
+Mycteroperca xenarcha,5,1e-4,0.2805,Cabrilla plomuda,Serranidae
+Lutjanus inermis,30,0.0051,0.2765,Pargo rabirrubia,Lutjanidae
+Cirrhitus rivulatus,20,0.0018,0.2378,Chino mero,Cirrhitidae
+Muraena clepsydra,20,5e-4,0.2117,Morena clepsidra,Muraenidae
+Diodon holocanthus,15,5e-4,0.1992,Pez erizo mapache;Pez erizo mapache,Diodontidae
+Anisotremus interruptus,10,4e-4,0.1947,Burro bacoco,Haemulidae
+Serranus psittacinus,90,0.0753,0.19,Serrano guaseta,Serranidae
+Chaetodon humeralis,75,0.008,0.1859,Mariposa muñeca,Chaetodontidae
+Aluterus scriptus,5,2e-4,0.1852,Lija trompa;Lija trompa,Monacanthidae
+Prionurus laticlavius,15,3e-4,0.1833,Cochinito barbero,Acanthuridae
+Urobatis halleri,5,1e-4,0.179,Raya redonda común,Urotrygonidae
+Sargocentron suborbitale,25,0.0035,0.163,NA,Holocentridae
+Plagiotremus azaleus,100,0.2182,0.1584,Diente sable,Blenniidae
+Caranx caninus,5,2e-4,0.1083,Jurel toro,Carangidae
+Halichoeres chierchiae,45,0.0033,0.1038,Señorita herida,Labridae
+Rypticus bicolor,15,0.0013,0.0992,Jabonero moteado,Serranidae
+Kyphosus vaigiensis,5,1e-4,0.0988,NA,Kyphosidae
+Kyphosus,5,9e-4,0.0889,NA,Kyphosidae
+Cirrhitichthys oxycephalus,95,0.0504,0.0814,Halcón de coral,Cirrhitidae
+Canthigaster punctatissima,95,0.0436,0.0697,Botete bonito,Tetraodontidae
+Muraena lentiginosa,20,4e-4,0.0681,Morena pinta,Muraenidae
+Stegastes acapulcoensis,20,0.0076,0.0654,Jaqueta acapulqueña,Pomacentridae
+Balistes polylepis,5,1e-4,0.0652,Cochi,Balistidae
+Diodon hystrix,5,2e-4,0.0632,Pez erizo pecoso;Pez erizo pecoso,Diodontidae
+Anisotremus taeniatus,5,1e-4,0.0457,Burro bandera,Haemulidae
+Halichoeres notospilus,20,0.0015,0.0333,Señorita listada,Labridae
+Anisotremus caesius,5,2e-4,0.0268,Burro mojarro,Haemulidae
+Alphestes multiguttatus,10,5e-4,0.0211,Guaseta rayada,Serranidae
+Scorpaena mystes,10,4e-4,0.0173,Escorpión roquero,Scorpaenidae
+Malacanthus brevirostris,5,4e-4,0.0171,NA,Malacanthidae
+Ophioblennius steindachneri,45,0.0044,0.0134,Borracho mono,Blenniidae
+Novaculichthys taeniourus,5,2e-4,0.0112,Cuchillo dragón,Labridae
+Synodus lacertinus,15,0.0035,0.0111,Chile lagarto,Synodontidae
+Pseudupeneus grandisquamis,10,4e-4,0.0106,Chivo escamudo,Mullidae
+Liopropoma fasciatum,10,0.0013,0.0086,Cabrilla arcoiris,Serranidae
+Oxycirrhites typus,30,0.0075,0.0082,Halcón narigón,Cirrhitidae
+Echidna nebulosa,5,1e-4,0.0063,Morena estrellada,Muraenidae
+Ostracion meleagris,10,4e-4,0.0058,Cofre moteado,Ostraciidae
+Fistularia commersonii,5,9e-4,0.005,Corneta pintada,Fistulariidae
+Lutjanus viridis,5,2e-4,0.0025,Pargo azul-dorado,Lutjanidae
+Coryphopterus urospilus,35,0.0051,0.0013,Gobio semáforo,Gobiidae
+Malacoctenus ebisui,25,0.0011,6e-4,Trambollo dorado,Labrisomidae
+Acanthemblemaria exilispinus,5,0.0015,2e-4,NA,Chaenopsidae
+Elacatinus puncticulatus,10,7e-4,2e-4,Gobio cabeza roja;Gobio cabeza roja,Gobiidae
+Apogon dovii,5,4e-4,1e-4,Cardenal colimanchada,Apogonidae
+Acanthemblemaria hancocki,5,5e-4,1e-4,NA,Chaenopsidae

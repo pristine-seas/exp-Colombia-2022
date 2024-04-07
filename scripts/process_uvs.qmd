@@ -1,0 +1,150 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Underwater visual surveys"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+This notebook cleans, processes, and analyzes the data from the underwater visual surveys conducted in the gulf of Tribugá as part of the 2022 Pristine Seas expedition to Colombia.
+
+# Metadata
+
+```{r}
+uvs_meta_pacifico <- readxl::read_excel(
+  file.path(exp_path, "data", "primary","raw","fish","tribuga_fish_metadata.xlsx")) |> 
+  janitor::clean_names() |> 
+  mutate(location = "Golfo de Tribugá")
+
+uvs_meta_caribe <- readxl::read_excel(
+  file.path(exp_path, "data", "primary","raw","fish","SEA_fish_metadata.xlsx")) |>  
+  janitor::clean_names() 
+
+uvs_meta <- uvs_meta_pacifico |> 
+  bind_rows(uvs_meta_caribe) 
+
+uvs_meta$location[uvs_meta$location == "Bajo_nuevo"] <- "Bajo Nuevo"
+
+uvs_meta$sublocation[uvs_meta$site_name == "La Chola"] <- "PNN Utria"
+
+uvs_meta$sublocation[uvs_meta$site_name == "Don Diego"]<- "PNN Utria"
+
+uvs_meta <- uvs_meta |> 
+  mutate(sublocation = coalesce(sublocation, location),
+         date = ymd(date),
+         ps_station_id = paste0("COL_uvs_", formatC(row_number(), width = 2, flag = 0)),
+         time = hms::as_hms(time),
+         habitat = if_else(str_detect(ps_station_id, 
+                                      "uvs_46|uvs_37|uvs_39|uvs_43|uvs_44"), 
+                           "island fringing reef",
+                           habitat),
+         team_lead = "Alan Friedlander") |> 
+  select(ps_station_id, date, location, sublocation, site_name, lat, lon, time, habitat, 
+         visibility = viz_m, team_lead)
+```
+
+```{r}
+uvs_meta |> 
+  filter(location == "Golfo de Tribugá") |> 
+  group_by( habitat) |> 
+  summarize(n())
+
+uvs_meta |> 
+  mutate(case_when(habitat == "nearshore coral reef" ~ "Arrecife de coral",
+                   str_detect(habitat, "rocky reef|rocky point") ~ "Arrecife rocoso",
+                   habitat == "offshore islet" ~ "Morro",
+                   habitat == "offshore pinnacle" ~ "Riscal",
+                   TRUE ~ NA_character_))
+```
+-
+```{r}
+uvs_meta |> 
+  write_csv(file.path(exp_path, "data", "primary", "output", "uvs_meta.csv"))
+
+
+uvs_meta |> 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) |> 
+  sf::st_write(file.path(exp_path, "data", "primary", "output", "spatial", "Tribuga_uvs_meta.shp"), 
+               append = F)
+```
+
+
+```{r plot_stations, eval = T, include = T}
+uvs_meta <-  read_csv(file.path(exp_path, 
+                                "data", "primary", "output", "uvs_meta.csv")) |> 
+  filter(location == "Golfo de Tribugá")
+
+mypal <- colorFactor(c("darkgrey","navy","red","darkgreen","orange","purple","gold",
+                     "green","pink"), 
+                   domain = unique(uvs_meta$habitat))
+
+uvs_meta %>% 
+  distinct(date, site_name, ps_station_id, lat, lon, location, sublocation, habitat) |> 
+  leaflet() %>% 
+  addProviderTiles(providers$Esri.WorldImagery) %>% 
+  setView(-77.35, 5.76, zoom = 10) %>% 
+  addTiles() %>% 
+  addCircleMarkers(color = ~mypal(habitat), 
+                   stroke = TRUE, 
+                   popup  = ~htmltools::htmlEscape(site_name),
+                   fillOpacity = 0.8) |> 
+  addLegend(position = "bottomright", 
+            color = mypal(unique(uvs_meta$habitat)), 
+            labels = unique(uvs_meta$habitat))
+```
+
+```{r eval = T, include = T}
+uvs_meta |> 
+  group_by(sublocation, habitat) |> 
+  summarize(n_sites = n()) |> 
+  reactable::reactable(groupBy = "sublocation",
+    defaultColDef = colDef(
+      header = function(value) gsub("_", " ", value, fixed = TRUE),
+      cell = function(value) format(value, nsmall = 1),
+      align = "center",
+      minWidth = 70,
+      aggregate = "sum",
+      headerStyle = list(background = "#f7f7f8")),
+    columns = list(
+      habitat = colDef(minWidth = 140)),  # overrides the default,
+    bordered = TRUE,
+    highlight = TRUE) %>% 
+  reactablefmtr::add_title(title = "Number of stations by region and habitat")
+```
+
+
+```{r}
+library(gt)
+
+sm1 <- read_csv(file.path(exp_path, "reports/Tribuga/supplement/SM5_uvs_station_summary.csv"))
+
+sm1 |> 
+  mutate_if(is.numeric, round, 3) |> 
+  gt() |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/tables/sm5.docx"))
+```
+

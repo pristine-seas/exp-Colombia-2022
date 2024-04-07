@@ -1,0 +1,232 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Pelagic Cameras"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+options(scipen=999)
+library(vegan)
+library(sf)
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(paletteer)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+pcam_meta <- read_csv(file.path(exp_path, 
+                               "data", "primary", "processed", "metadata", "pcam_meta.csv")) %>% 
+  filter(location == "Golfo de Tribuga")
+
+op_codes <- readxl::read_xlsx(file.path(exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_Midwater_Metadata_29112022.xlsx"), 
+                              sheet = "Metadata") |> 
+  filter(Location == "Tribuga") |> 
+  select(op_code = OpCode, ps_station_id, ps_sample_id)
+
+pcam_maxN <- readxl::read_xlsx(file.path(exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_Midwaters_MaxN_29112022.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  mutate(taxon = if_else(!is.na(genus), paste(genus, species), family),
+         taxon = str_remove_all(taxon, "Class:")) |> 
+    filter(!is.na(taxon)) |> 
+  select(op_code, taxon, max_n)  
+
+pcam_lengths <- readxl::read_xlsx(file.path(exp_path, 
+                                         "data/primary/raw",
+                                         "pcam","Colombia_Midwaters_Lengths_29112022.xlsx")) %>% 
+  janitor::clean_names() %>% 
+    mutate(taxon = if_else(!is.na(genus), paste(genus, species), family),
+         taxon = str_remove_all(taxon, "Class:")) |> 
+  filter(!is.na(taxon)) |> 
+  select(op_code, taxon, length_mm) 
+  
+pcam_maxN <- op_codes |> 
+  left_join(pcam_maxN)|> 
+  filter(!is.na(max_n))
+
+pcam_lengths <- op_codes |> 
+  left_join(pcam_lengths) |> 
+  filter(!is.na(length_mm))
+
+pcam_maxN |> 
+  dplyr::group_by(op_code, taxon) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::filter(n > 1L)
+```
+
+# Taxa
+
+```{r}
+taxa_summary <- pcam_maxN |> 
+  group_by(taxon) |> 
+  summarize(freq_obs = 100*n_distinct(op_code[max_n > 0])/length(unique(pcam_maxN$op_code)),
+            sum_maxN = sum(max_n),
+            mean_maxN = mean(max_n)) |> 
+  left_join(pcam_lengths |> 
+              group_by(taxon) |> 
+              summarize(length_cm = mean(length_mm)/10)) |> 
+  mutate_if(is.numeric, round, 2)
+```
+
+```{r}
+pcam_taxa <- bdc::bdc_clean_names(taxa_summary$taxon) %>% 
+  janitor::clean_names() %>% 
+  select(taxon = scientific_name, 
+         taxon_clean = names_clean) %>% 
+  mutate(taxon_clean = coalesce(taxon_clean, 
+                                taxadb::clean_names(taxon, lowercase = F))) %>% 
+  distinct(taxon, taxon_clean) |> 
+  mutate(taxon_clean = str_remove_all(taxon_clean,
+                                      "unidentified") |> 
+           str_squish()) |> 
+  mutate(taxon_clean = if_else(str_detect(taxon, "\\("), 
+                        str_remove(taxon, "\\([^()]+\\)"),
+                        taxon_clean) |> 
+           str_squish())
+
+taxonomy_worms <- pcam_taxa$taxon_clean %>% 
+  split(ceiling(seq_along(pcam_taxa$taxon_clean)/4)) %>% 
+  furrr::future_map_dfr(worrms::wm_records_names) %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                              paste0("WORMS:", valid_aphia_id),
+                              NA_character_)) %>% 
+  select(taxon_clean = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct()
+
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxon_clean) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxon_clean) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+taxonomy_worms %>% 
+  filter(taxon_valid_name != taxon_clean)
+
+pcam_taxa <- pcam_taxa |> 
+  left_join(taxonomy_worms, by = "taxon_clean")|> 
+  select(-taxon_clean)
+
+pcam_taxa$class[pcam_taxa$taxon == "Chelonia mydas"] <- "Reptilia"
+pcam_taxa$class[str_detect(pcam_taxa$taxon, "Hydrophis")] <- "Reptilia"
+```
+
+```{r}
+pcam_taxa |> 
+  select(class, family, taxon) |> 
+  inner_join(taxa_summary) |> 
+  gt::gt() |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/tables/tribuga_pelagics.docx"))
+```
+
+```{r}
+pcam_taxa <- pcam_taxa |> 
+  mutate(family = if_else(is.na(family), class, family),
+         family = if_else(is.na(family), "Juveniles sin identificar", family)) 
+
+taxa_summary |>  
+  inner_join(pcam_taxa) |> 
+  group_by(family) |> 
+  summarize(sum_maxN = sum(sum_maxN)) |> 
+  mutate(p = 100*sum_maxN/sum(sum_maxN)) |> 
+  arrange(desc(sum_maxN))
+
+taxa_summary |>  
+  group_by(taxon) |> 
+  summarize(sum_maxN = sum(sum_maxN)) |> 
+  mutate(p = 100*sum_maxN/sum(sum_maxN)) |> 
+  arrange(desc(sum_maxN))
+```
+
+# Variability
+
+```{r}
+summary_by_cam <- pcam_meta |> 
+  distinct(ps_station_id, ps_sample_id, sublocation, lat_in, lon_in) |> 
+  left_join(pcam_maxN |> 
+              group_by(ps_sample_id) |> 
+              summarize(n_taxa = n_distinct(taxon),
+                        sum_maxN = sum(max_n)))
+
+summary_by_cam |>
+  ggplot()+
+  geom_boxplot(aes(sublocation , sum_maxN))
+```
+```{r}
+summary_by_cam_and_family
+```
+
+```{r}
+familias <- read_csv(file.path(exp_path, "data/primary/raw/fish/families_in_spanish.csv"))
+
+summary_by_cam_and_family <- pcam_meta |> 
+  distinct(ps_station_id, ps_sample_id, sublocation, lat_in, lon_in) |> 
+  left_join(pcam_maxN |> 
+              left_join(pcam_taxa) |> 
+              group_by(ps_sample_id, family) |> 
+              summarize(n_taxa = n_distinct(taxon),
+                        sum_maxN = sum(max_n)))
+
+
+summary_by_cam_and_family |> 
+  mutate(familia = case_when(family == "Coryphaenidae" ~ "Dorados (Coryphaena)",
+                             family == "Carangidae" ~ "Jureles (Carangidae)",
+                             family == "Cheloniidae" ~ "Tortugas marinas (Cheloniidae)",
+                             family == "Cubozoa" ~ "Medusas de cubo (Cubozoa)",
+                             family == "Scyphozoa" ~ "Medusas (Scyphozoa)",
+                             family == "Anthozoa" ~ "Corales y anémonas (Anthozoa)",
+                             family == "Elapidae" ~ "Serpientes marinas (Elapidae)",
+                             family == "Fistulariidae" ~ "Cornetas (Fistulariidae)",
+                             family == "Nomeidae" ~ "Peces de deriva (Nomeidae)",
+                             family == "Phylliroidae" ~ "Nudibranquios (Phylliroidae)",
+                             family == "Thaliacea" ~ "Doliolos y Pirosomas (Thaliacea)",
+                             family == "Salpidae" ~ "Salpas (Salpidae)",
+                             family == "Hydrozoa" ~ "Hidrozoos (Hydrozoa)",
+                             family == "Tentaculata" ~ "Ctenóforos (Tentaculata)",
+                             TRUE ~ family)) |> 
+  group_by(sublocation, familia) |> 
+  summarize(max_n = mean(sum_maxN)) |> 
+  ggplot()+
+  geom_col(aes(sublocation, max_n, fill = fct_reorder(familia, max_n, sum)))+
+  labs(x = "", y = "", fill = "")+
+  bbplot::bbc_style()+
+  scale_fill_paletteer_d("ggthemes::Tableau_20")+
+  theme(legend.position = "right")
+
+ggsave(file.path(exp_path, "figures", "tribuga_pcam_maxN_by_location.png"), width = 12)
+ggsave(file.path(exp_path, "figures", "tribuga_pcam_maxN_by_location.pdf"), width = 12)
+```
+
+

@@ -279,7 +279,9 @@ fish_transects <- fish_obs %>%
 fish_obs <- fish_obs %>% 
       left_join(fish_taxa %>% 
               distinct(ps_taxon_code, location, taxon_valid_name, order, family, a, b, max_length_tl)) %>% 
-  select(ps_station_id, ps_sample_id, ps_transect_id, order, family, taxon_valid_name, n_ind, avg_length,min_length, max_length, diver, transect, depth_m, depth_strata, location, sublocation,habitat, a, b, max_length_tl) %>% 
+  select(ps_station_id, ps_sample_id, ps_transect_id, order, family, taxon_valid_name, n_ind, avg_length,
+         min_length, max_length, diver, transect, depth_m, depth_strata, location, sublocation,
+         habitat, a, b, max_length_tl) %>% 
   arrange(ps_sample_id, transect) 
 ```
 
@@ -637,7 +639,7 @@ transect_summary %>%
 
 adonis2(transect_summary %>% 
           filter(location == "Golfo de Tribuga") %>% 
-          select(ind_m2, gr_m2) ~  depth_strata + diver + sublocation, 
+          select(gr_m2) ~  depth_strata + diver + sublocation, 
         data = fish_transects %>% 
           filter(location == "Golfo de Tribuga"),
         strata = transect_summary$ps_station_id,

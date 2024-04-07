@@ -1,0 +1,164 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Underwater visual surveys"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+
+This notebook cleans, processes, and analyzes the data from the underwater visual surveys conducted in the gulf of Tribugá as part of the 2022 Pristine Seas expedition to Colombia.
+
+# Metadata
+
+
+```{r}
+uvs_meta_pacifico <- readxl::read_excel(
+  file.path(exp_path, "data", "primary","raw","fish","tribuga_fish_metadata.xlsx")) |> 
+  janitor::clean_names() |> 
+  mutate(location = "Golfo de Tribugá")
+
+uvs_meta_caribe <- readxl::read_excel(
+  file.path(exp_path, "data", "primary","raw","fish","SEA_fish_metadata.xlsx")) |>  
+  janitor::clean_names() 
+
+uvs_meta <- uvs_meta_pacifico |> 
+  bind_rows(uvs_meta_caribe) 
+
+uvs_meta$location[uvs_meta$location == "Bajo_nuevo"] <- "Bajo Nuevo"
+
+uvs_meta$sublocation[uvs_meta$site_name == "La Chola"] <- "PNN Utria"
+
+uvs_meta$sublocation[uvs_meta$site_name == "Don Diego"]<- "PNN Utria"
+
+uvs_meta <- uvs_meta |> 
+  mutate(sublocation = coalesce(sublocation, location),
+         date = ymd(date),
+         ps_station_id = paste0("COL_uvs_", formatC(row_number(), width = 2, flag = 0)),
+         time = hms::as_hms(time),
+         habitat = if_else(str_detect(ps_station_id, 
+                                      "uvs_46|uvs_37|uvs_39|uvs_43|uvs_44"), 
+                           "island fringing reef",
+                           habitat),
+         team_lead = "Alan Friedlander") |> 
+  select(ps_station_id, date, location, sublocation, site_name, lat, lon, time, habitat, 
+         visibility = viz_m, team_lead)
+
+uvs_meta |> 
+  write_csv(file.path(exp_path, "data", "primary", "output", "uvs_meta.csv"))
+```
+
+```{r plot_stations, eval = T, include = T}
+uvs_meta <-  read_csv(file.path(exp_path, 
+                                "data", "primary", "output", "uvs_meta.csv")) |> 
+  filter(location == "Golfo de Tribugá")
+
+mypal <- colorFactor(c("darkgrey","navy","red","darkgreen","orange","purple","gold",
+                     "green","pink"), 
+                   domain = unique(uvs_meta$habitat))
+
+uvs_meta %>% 
+  distinct(date, site_name, ps_station_id, lat, lon, location, sublocation, habitat) |> 
+  leaflet() %>% 
+  addProviderTiles(providers$Esri.WorldImagery) %>% 
+  setView(-77.35, 5.76, zoom = 10) %>% 
+  addTiles() %>% 
+  addCircleMarkers(color = ~mypal(habitat), 
+                   stroke = TRUE, 
+                   popup  = ~htmltools::htmlEscape(site_name),
+                   fillOpacity = 0.8) |> 
+  addLegend(position = "bottomright", 
+            color = mypal(unique(uvs_meta$habitat)), 
+            labels = unique(uvs_meta$habitat))
+```
+
+```{r eval = T, include = T}
+uvs_meta |> 
+  group_by(sublocation, habitat) |> 
+  summarize(n_sites = n()) |> 
+  reactable::reactable(groupBy = "sublocation",
+    defaultColDef = colDef(
+      header = function(value) gsub("_", " ", value, fixed = TRUE),
+      cell = function(value) format(value, nsmall = 1),
+      align = "center",
+      minWidth = 70,
+      aggregate = "sum",
+      headerStyle = list(background = "#f7f7f8")),
+    columns = list(
+      habitat = colDef(minWidth = 140)),  # overrides the default,
+    bordered = TRUE,
+    highlight = TRUE) %>% 
+  reactablefmtr::add_title(title = "Number of stations by region and habitat")
+```
+
+```{r}
+tribuga_sat_img <- terra::rast(file.path(exp_path, 
+                                         "data", "secondary", 
+                                         "raw", "Allen atlas", "tribuga_hr_sat_image_clipped.tif")) |> 
+  terra::trim()
+
+tribuga_dem <- terra::rast( file.path(exp_path, "data", "secondary", "raw","bathymetry/Tribuga",
+                       "tribuga_bathy_high_res_int.tif")) |> 
+  terra::trim()
+  
+
+ggplot() + 
+  tidyterra::geom_spatraster_rgb(data = tribuga_sat_img, na.rm = TRUE, alpha = 1)+
+    tidyterra::geom_spatraster(data = tribuga_dem,
+na.rm = TRUE,inherit.aes = FALSE, show.legend = F)
+
+
+
+plot(tribuga_dem)
+terra::project(y = "epsg:3857") 
+```
+
+```{r}
+library(basemaps)
+
+ext <- basemaps::draw_ext()
+
+ggplot() + 
+  basemap_gglayer(ext, 
+                  map_service = "esri", 
+                  map_type = "world_imagery", 
+                  map_res = 1) +
+  scale_fill_identity() +
+  coord_sf()+
+  geom_sf(data = uvs_meta |> 
+            sf::st_as_sf(coords = c("lon", "lat"), 
+                         crs = 4326) |> 
+            sf::st_transform(crs = 3857), 
+          aes(col = habitat))+
+  geom_sf(data = drmi_gtcc |> 
+            sf::st_transform(crs = 3857),
+          fill = "transparent",
+          col = "orange") |> 
+  tidyterra::geom_spatraster(data = tribuga_dem,
+na.rm = TRUE,inherit.aes = FALSE, show.legend = F)
+```
+

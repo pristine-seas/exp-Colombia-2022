@@ -1,0 +1,98 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Mesophotic Cameras"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+options(scipen=999)
+library(vegan)
+library(sf)
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(paletteer)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+meso_meta <- read_csv(file.path(exp_path, 
+                               "data", "primary", "processed", "metadata", "meso_meta.csv")) %>% 
+  filter(location == "Golfo de Tribuga")
+
+op_codes <- readxl::read_xlsx(file.path(exp_path, 
+                                         "data/primary/raw",
+                                         "meso","Colombia_Mesophotic_Metadata_12102022.xlsx"), 
+                              sheet = "Metadata") |> 
+  janitor::clean_names() |> 
+  filter(ocean_basin == "Pacific") |> 
+  select(op_code = sample, ps_station_id)
+
+meso_maxN <- readxl::read_xlsx(file.path(exp_path, 
+                                         "data/primary/raw",
+                                         "meso","Colombia_Mesophotic_MaxN_25_10_2022.xlsx")) %>% 
+  janitor::clean_names() %>% 
+  mutate(taxon = if_else(!is.na(genus), paste(genus, species), family),
+         taxon = str_remove_all(taxon, "Class:")) |> 
+  filter(!is.na(taxon), pacific_or_caribbean == "Pacific") |> 
+  select(op_code, taxon, max_n)
+
+meso_maxN <- op_codes |> 
+  left_join(meso_meta) |> 
+  left_join(meso_maxN) |> 
+  select(sublocation, ps_station_id, op_code, depth_m, taxon, max_n)
+
+meso_maxN <- meso_maxN |> 
+  pivot_wider(names_from = taxon, values_from = max_n, values_fill = 0) |> 
+  pivot_longer(-c("sublocation", "ps_station_id", "op_code", "depth_m"),
+               values_to = "max_n", names_to = "taxon")
+```
+
+## Taxa
+
+```{r}
+taxa_summary <- meso_maxN |> 
+  group_by(taxon) |> 
+  summarize(freq = 100*n_distinct(ps_station_id[max_n > 0])/6, 
+            mean_maxN = mean(max_n),
+            sum_maxN = sum(max_n)) |> 
+  mutate_if(is.numeric, round, 2) |> 
+  arrange(desc(sum_maxN))
+
+taxa_summary |> 
+  gt::gt() |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/tables/tribuga_meso.docx"))
+```
+
+## 
+
+```{r}
+summary_by_cam <- meso_meta |> 
+  distinct(ps_station_id, sublocation, lat, lon, depth_m) |> 
+  left_join(meso_maxN |> 
+              group_by(ps_station_id) |> 
+              summarize(n_taxa = n_distinct(taxon[max_n > 0]),
+                        sum_maxN = sum(max_n)))
+
+mean(summary_by_cam$n_taxa)
+```
+

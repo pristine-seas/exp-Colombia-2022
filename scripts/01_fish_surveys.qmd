@@ -1,0 +1,691 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Fish Surveys"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+options(scipen=999)
+library(vegan)
+library(sf)
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(paletteer)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+# Expedition metadata
+
+```{r}
+metadata_tribuga <- read_csv(file.path(exp_path, "data", "primary", "processed/metadata", "exp_meta.csv")) |> 
+  filter(location == "Golfo de Tribuga") |> 
+  mutate(method = case_when(method == "Shallow BRUVS" ~ "BRUVS somero",
+                            method == "Submersible" ~ "Sumergible",
+                            method == "Seabird transect" ~"Aves marinas",
+                            method == "Shark tagging" ~ "Marcaje de tiburones",
+                            method == "YSI probe" ~ "Mediciones oceanográficas",
+                            method == "eDNA" ~ "ADN ambiental",
+                            method == "Dropcams" ~ "Dropcam",
+                            method == "Mesophotic BRUVS" ~ "BRUVS mesofótico",
+                            method == "Pelagic BRUVS" ~ "BRUVS pelágico",
+                            method == "Deepsee" ~ "Sumergible",
+                            method == "Scuba survey" ~ "Censos SCUBA",
+                            method %in% c("Fish survey", 
+                                          "Coral presence", 
+                                          "Point contacts",
+                                          "Vagile inverts survey") ~ "Censos SCUBA",
+                            TRUE ~ method)) 
+
+metadata_tribuga |> 
+  group_by(method, sublocation) |> 
+  summarize(n_stations = n_distinct(ps_station_id)) |> 
+  pivot_wider(values_from = n_stations, names_from = sublocation) |> 
+  ungroup() |> 
+  gt::gt(rowname_col = "method") |> 
+  gt::tab_header(title = "Número de estaciones de trabajo por región") 
+```
+
+```{r}
+tribuga_dem <- terra::rast( file.path(exp_path, "data", "secondary", "raw","bathymetry/Tribuga",
+                       "tribuga_bathy_high_res_int.tif")) %>% 
+  terra::project(y = "+proj=longlat +datum=WGS84 +no_defs")
+
+gtcc_roi_bbox <- st_union(drmi_gtcc, utria) %>% 
+  st_buffer(dist = 8000) %>% 
+  st_difference(col_land) %>% 
+  st_bbox()
+
+metadata_tribuga_sf <- metadata_tribuga |> 
+  distinct(method, lat, lon) %>% 
+  filter(!is.na(lon)) %>% 
+  sf::st_as_sf(coords = c("lon", "lat"), crs = 4326) %>% 
+  st_jitter(.003) 
+
+st_write(metadata_tribuga_sf, file.path(exp_path, 
+                                        "data/primary/processed/metadata/tribuga.shp"), append = F)
+
+ggplot()+
+  geom_sf(data = utria, fill = "transparent", linetype ="dashed", col = "darkgreen")+
+  tidyterra::geom_spatraster(data = tribuga_dem, 
+                             na.rm = TRUE, inherit.aes = FALSE, show.legend = F)+
+  geom_sf(data = drmi_gtcc, fill = "transparent", linetype ="dashed", col = "white")+
+  geom_sf(data = utria, fill = "transparent", linetype ="dashed", col = "darkgreen")+
+  geom_sf(data = metadata_tribuga_sf,
+          aes(shape = method, col = method), size = 2)+
+    geom_sf(data = st_crop(col_land,
+                         st_union(drmi_gtcc, utria) %>%
+                           st_buffer(dist = 10000) ),
+          fill = "#8D99AE", size = 0.01)+
+  coord_sf(xlim = c(gtcc_roi_bbox["xmin"] - 10000, gtcc_roi_bbox["xmax"] + 2000),
+           ylim = c(gtcc_roi_bbox["ymin"] + 3000, gtcc_roi_bbox["ymax"]),
+           expand = FALSE)+
+  paletteer::scale_color_paletteer_d("RColorBrewer::Set3",  name = "")+
+  scale_shape_manual(values= seq(100:110), name = "")+
+  theme_light()+
+  scale_fill_continuous(na.value="transparent")+
+  paletteer::scale_fill_paletteer_c("pals::ocean.dense", na.value="transparent")+
+  labs(col = "", shape = "")+
+  theme(legend.position = c(0.15, 0.88),
+        legend.text = element_text(colour = "white"), 
+        legend.background = element_blank(),
+        legend.key = element_blank(),
+        panel.background  = element_rect(fill ="#E0F1F0"),
+        panel.grid = element_blank())
+
+ggsave(filename = file.path(exp_path, "figures", "Tribuga_meta_spanish.png"), 
+       dpi = 300, height = 7, width = 6)
+
+metadata_tribuga |> 
+  distinct(metodo = method, region = sublocation, ps_station_id, latitud = lat, longitud = lon, hora_local = time) |> 
+  filter(!is.na(latitud)) |> 
+  mutate_if(is.numeric, round, 4) |> 
+  write_csv(file.path(exp_path, "reports/Tribuga/supplement/SM1_exp_metadata.csv"))
+```
+
+# Fish surveys
+
+```{r}
+site_names <- readxl::read_excel(file.path(exp_path,
+                                           "data/primary/raw/fish/tribuga_fish_metadata.xlsx")) %>% 
+  janitor::clean_names() |> 
+  mutate(ps_station_id = str_replace_all(ps_station_id, "fish", "uvs")) |> 
+  select(ps_station_id, site_name)
+
+uvs_meta <-  read_csv(file.path(exp_path, "data/primary/processed/metadata/uvs_meta.csv")) %>%
+  filter(str_detect(ps_sample_id,"fish"), 
+         location == "Golfo de Tribuga") |> 
+  left_join(site_names) |> 
+  mutate(depth_strata = cut(depth_m, breaks = c(0, 14.9, Inf), labels = c("Shallow", "Deep")))
+
+trop_levels <- readxl::read_excel(file.path(exp_path,
+                                           "data/primary/raw/fish/tribuga_fish_troph_levels.xlsx"))
+
+fish_taxa <- read_csv(file.path(exp_path, "data/primary/processed/taxa", "uvs_fish_taxa.csv")) |> 
+  filter(location == "Golfo de Tribuga") |> 
+  filter(taxon != "Elacanthis rubrifrons") |> 
+  left_join(trop_levels)
+
+fish_taxa <- fish_taxa |> 
+  mutate(trophic_4 = case_when(trophic_4 == "Z" ~ "Planktívoro",
+                               trophic_4 == "INV" ~ "Invertívoro",
+                               trophic_4 == "P" ~ "Piscívoro",
+                               trophic_4 == "H" ~ "Herbívoro",
+                               TRUE ~ trophic_4),
+         trophic_7 = case_when(trophic_7 == "O" ~ "Omnívoro",
+                               trophic_7 == "C" ~ "Carnívoro",
+                               trophic_7 == "P" ~ "Piscívoro",
+                               trophic_7 == "MI" ~ "Invertebrados",
+                               trophic_7 == "SI" ~ "Invertebrados sésiles",
+                               trophic_7 == "PL" ~ "Planktívoro",
+                               trophic_7 == "RH" ~ "Herbívoro",
+                               trophic_7 == "TH" ~ "Herbívoro territorial",
+                               TRUE ~ trophic_7))
+
+# fish_taxa$taxon_valid_name[fish_taxa$ps_taxon_code == "LU.ARGE"] <- "Lutjanus argentiventris"
+# fish_taxa$taxon[fish_taxa$ps_taxon_code == "LU.ARGE"] <- "Lutjanus argentiventris"
+# fish_taxa$a[fish_taxa$ps_taxon_code == "LU.ARGE"] <- 0.01479
+
+fish_fams <- read.csv(file.path(exp_path, "data/primary/raw/fish", "families_in_spanish.csv"), 
+                      encoding = "utf-8")  
+
+fish_taxa <- fish_taxa |> 
+  left_join(fish_fams)
+
+commercial_taxa <- read.csv(file.path(exp_path, "data/primary/raw/fish", "commercial_taxa.csv")) 
+
+fish_taxa <- fish_taxa |> 
+  left_join(commercial_taxa)
+
+biomass_by_taxa_and_transect <- read_csv(file.path(exp_path,
+                                                   "data/primary/processed/analyses",
+                                                   "uvs_fish_biomass_by_transect.csv")) |> 
+  filter(location == "Golfo de Tribuga")
+
+biomass_by_taxa_and_strata <- uvs_meta |> 
+  select(sublocation, ps_station_id, ps_sample_id, depth_strata) |> 
+  full_join(biomass_by_taxa_and_transect |> 
+              group_by(ps_sample_id, taxon_valid_name) |> 
+              summarize(n_ind = mean(n_ind, na.rm = T),
+                        ind_m2 = mean(ind_m2, na.rm = T),
+                        gr_m2 = mean(gr_m2, na.rm = T)))
+
+# biomass_by_taxa_and_strata |> 
+#   group_by(ps_station_id, ps_sample_id) |> 
+#   summarize(gr_m2 = sum(gr_m2)) |> 
+#   ungroup() |> 
+#   summarize(mean(gr_m2))
+# 
+# biomass_by_taxa_and_strata |> 
+#   group_by(ps_station_id, taxon_valid_name) |> 
+#   summarize(gr_m2 = mean(gr_m2)) |> 
+#   ungroup() |> 
+#   group_by(ps_station_id) |> 
+#   summarise(gr_m2 = sum(gr_m2)) |> 
+#   ungroup() |> 
+#   summarize(mean(gr_m2))
+# 
+# biomass_by_taxa_and_transect %>%
+#   group_by(ps_sample_id, ps_transect_id) %>%
+#   summarize(gr_m2 = sum(gr_m2, na.rm = T)) %>%
+#   ungroup() |>
+#   summarize(mean(gr_m2))
+
+fish_taxa |> distinct(taxon_valid_name, 
+                      family, 
+                      genus) |>
+  arrange(taxon_valid_name, family) |> 
+  write_csv("taxa_for_commercial.csv")
+```
+
+## Fish size
+
+```{r}
+tribuga_obs <- readxl::read_xlsx(file.path(exp_path, 
+                                           "data/primary/raw/fish", "tribuga_fish_data_final.xlsx")) %>% 
+  select(ps_station_id, diver, transect, ps_taxon_code = species, 
+         min_length = min, max_length = max, n_ind = number) %>% 
+  group_by(ps_station_id) %>% 
+  mutate(station_number = formatC(cur_group_id(), width = 2, flag = 0)) %>% 
+  ungroup() %>% 
+  mutate(ps_station_id = paste0("COL_uvs_", station_number)) 
+
+library(ggridges)
+
+tribuga_obs |> 
+  left_join(fish_taxa |> select(ps_taxon_code, familia, trophic_4)) |> 
+  filter(!is.na(trophic_4)) |> 
+  ggplot(aes(x = max_length, y = fct_reorder(trophic_4, max_length, mean), 
+             fill = 0.5 - abs(0.5 - stat(ecdf))))+
+  stat_density_ridges(geom = "density_ridges_gradient", 
+                      calc_ecdf = TRUE, scale = 1.2, show.legend = F) +
+  scale_fill_viridis_c(name = "Probabilidad", direction = 1)+
+  labs(y = "", x = "Longitud total (cm)")+
+  bbplot::bbc_style()
+
+ggsave(file.path(exp_path, "figures/tribuga_fish_size.png"), width = 13)
+ggsave(file.path(exp_path, "reports/Tribuga/assets/tribuga_fish_size.pdf"), width = 13)
+```
+
+```{r}
+tribuga_obs |> 
+  #left_join(uvs_meta |> distinct(ps_station_id, sublocation)) |> 
+  left_join(fish_taxa |> distinct(ps_taxon_code, objetivo)) |> 
+  group_by(objetivo) |> 
+  summarise(mean_size = weighted.mean(max_length, n_ind)) |> 
+  arrange(desc(mean_size))
+```
+
+## Species diversity 
+
+```{r}
+taxa_by_family_and_trophic_group <- biomass_by_taxa_and_transect |> 
+  left_join(fish_taxa) |> 
+  mutate(familia = paste(familia, paste0("(",family, ")"))) |> 
+  group_by(trophic_4, familia) %>% 
+  summarise(n_taxa = n_distinct(taxon_valid_name))
+
+trophs <- unique(taxa_by_family_and_trophic_group$trophic_4) 
+
+trophs_palette <- c("#678d58","#ffee93", "#4effef","#ffc09f") 
+
+names(trophs_palette) <- trophs
+
+ggplot(taxa_by_family_and_trophic_group)+
+  geom_col(aes(fct_reorder(familia, n_taxa, sum), 
+               n_taxa, fill = trophic_4))+
+  coord_flip()+
+  labs(x = "", y = "")+
+  scale_y_continuous(breaks = seq(1,10,1))+
+  bbplot::bbc_style()+
+  scale_fill_manual(values = trophs_palette)+
+  theme(legend.position = "bottom")
+
+ggsave(file.path(exp_path, "figures", "tribuga_uvs_fish_taxa_bar.pdf"), width = 13)
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "fish_taxa_bar.pdf"), width = 13)
+
+taxa_by_family_and_trophic_group |> 
+  group_by(trophic_4) |> 
+  summarize(sum(n_taxa))
+```
+
+## Biomass
+
+
+
+```{r}
+biomass_by_taxa_and_station <- biomass_by_taxa_and_transect %>% 
+  left_join(uvs_meta %>% 
+              dplyr::select(ps_sample_id, ps_station_id, sublocation)) %>% 
+  group_by(sublocation, ps_station_id, taxon_valid_name) %>% 
+  summarize(n_ind = mean(n_ind, na.rm = T),
+            ind_m2 = mean(ind_m2, na.rm = T),
+            gr_m2 = mean(gr_m2, na.rm = T)) %>% 
+  ungroup() %>% 
+  group_by(ps_station_id) %>% 
+  mutate(f_n_ind = n_ind/sum(n_ind),
+         f_ind_m2 = ind_m2/sum(ind_m2),
+         f_gr_m2 = gr_m2/sum(gr_m2)) %>% 
+  ungroup() %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  dplyr::select(sublocation, ps_station_id, taxon_valid_name, 
+         n_ind, f_n_ind, ind_m2, f_ind_m2, gr_m2, f_gr_m2)
+
+biomass_by_taxa_and_station |> 
+  group_by(sublocation, ps_station_id) |> 
+  summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
+            across(c(n_ind, ind_m2, gr_m2), sum)) |> 
+  ungroup() |> 
+  group_by(sublocation) |> 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean))
+```
+```{r}
+biomass_by_taxa_and_station |> 
+  left_join(fish_taxa |> distinct(taxon_valid_name, objetivo)) |> 
+  group_by(sublocation, ps_station_id, objetivo) |> 
+  summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
+            across(c(n_ind, ind_m2, gr_m2), sum)) |> 
+  ungroup() |> 
+  group_by(sublocation, objetivo) |> 
+  summarize(across(c(n_taxa, n_ind, ind_m2, gr_m2), mean))
+```
+
+```{r}
+biomass_by_station_and_trophic <- biomass_by_taxa_and_station |> 
+  left_join(fish_taxa |> distinct(taxon_valid_name, trophic_4)) |> 
+  group_by(ps_station_id, trophic_4) |> 
+  summarize(gr_m2 = sum(gr_m2)) |> 
+  ungroup() |> 
+  pivot_wider(names_from = trophic_4, values_from = gr_m2)
+```
+
+### Top taxa
+
+```{r}
+biomass_by_taxa |> 
+  mutate(density = ind_m2*10) |> 
+  arrange(density) |> 
+  select(taxon_valid_name, density) |> 
+  View()
+```
+
+```{r}
+n_stations <- length(unique(uvs_meta$ps_station_id))
+
+biomass_by_taxa <- biomass_by_taxa_and_transect |>
+  left_join(uvs_meta %>% 
+              dplyr::select(sublocation, ps_sample_id, ps_station_id)) |> 
+  ungroup() |> 
+  group_by(taxon_valid_name) |> 
+  summarize(freq_obs = 100*n_distinct(ps_station_id[n_ind > 0])/n_stations, 
+            ind_m2 = mean(ind_m2),
+            gr_m2 = mean(gr_m2)) |> 
+  ungroup() |> 
+  left_join(fish_taxa |> 
+              select(taxon_valid_name, common_name_spa, family, trophic_4, trophic_7, objetivo)) 
+
+biomass_by_taxa |> 
+  select(-objetivo) |> 
+  select(family, common_name_spa, everything(), trophic_class = trophic_4) |> 
+  arrange(desc(gr_m2)) |> 
+  mutate_if(is.numeric, round, 3) |> 
+  head(30) |> 
+  gt::gt() |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/tables", "Tribuga_most_representative_fish.docx"))
+```
+
+```{r}
+sum(biomass_by_taxa$gr_m2)
+```
+
+```{r}
+biomass_by_taxa |> 
+  group_by(objetivo) |> 
+  summarize(gr_m2 = round(sum(gr_m2), 3)) |> 
+  arrange(desc(gr_m2)) |> 
+  ungroup() |> 
+  mutate(f = round(100*gr_m2/sum(gr_m2)))
+```
+
+```{r}
+biomass_by_taxa |> 
+  left_join(fish_taxa |> distinct(taxon_valid_name, familia)) |> 
+  mutate(familia = paste(familia, paste0("(",family, ")"), sep = "\n")) |> 
+  group_by(familia) |> 
+  summarize(gr_m2 = round(sum(gr_m2), 0)) |> 
+  ggplot(aes(area = gr_m2, 
+             label = paste(familia, gr_m2, sep = "\n"),
+             fill = gr_m2)) +
+  treemapify::geom_treemap(show.legend = F)+
+  treemapify::geom_treemap_text(colour = "black", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "")+
+  paletteer::scale_fill_paletteer_c("ggthemes::Blue-Green Sequential")+
+  bbplot::bbc_style()
+
+ggsave(file.path(exp_path, 
+                 "figures/tribuga_fish_biomass_by_family_treemap.png"), width = 12, height = 12)
+
+ggsave(file.path(exp_path, 
+                 "reports/Tribuga/Assets/fish_biomass_by_family_treemap.pdf"), width = 12, height = 12)
+```
+
+```{r}
+biomass_by_taxa <- biomass_by_taxa |> 
+  select(trophic_4, family, taxon_valid_name, freq_obs, ind_m2, gr_m2) |> 
+  left_join(biomass_by_taxa_and_station |>
+              group_by(sublocation, taxon_valid_name) |> 
+              summarize(gr_m2 = mean(gr_m2)) |> 
+              pivot_wider(names_from = sublocation, values_from = gr_m2) ) |> 
+  mutate_if(is.numeric, round, 4)
+
+biomass_by_taxa |> 
+  mutate(p = gr_m2/sum(gr_m2)) |> 
+  slice_max(gr_m2, n = 10) |> 
+  summarize(sum(p))
+
+```
+
+```{r}
+fish_taxa |> 
+  select(filo = phylum, clase = class, orden = order, familia = family, familia_comun = familia, 
+         especie = taxon_valid_name, grupo_trofico = trophic_4) |> 
+  left_join(biomass_by_taxa, by = c("especie" = "taxon_valid_name")) |> 
+  mutate_if(is.numeric, round, 4) |> 
+  write_csv(file.path(exp_path, "reports/Tribuga/supplement/SM4_uvs_fish_taxa_summary.csv"))
+```
+
+### Depth effect
+
+```{r}
+transect_summary <- biomass_by_taxa_and_transect %>% 
+  group_by(location, ps_sample_id, ps_transect_id) %>% 
+  summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
+            n_ind = sum(n_ind),
+            ind_m2 = sum(ind_m2),
+            gr_m2 = sum(gr_m2)) %>% 
+  ungroup() 
+
+n_ind_data_wide <- biomass_by_taxa_and_transect %>% 
+  dplyr::select(ps_transect_id, taxon_valid_name, n_ind) %>% 
+  pivot_wider(names_from = taxon_valid_name, values_from = n_ind, values_fill = 0) %>% 
+  column_to_rownames("ps_transect_id") 
+
+diversity_by_transect <- diversity(n_ind_data_wide) %>% 
+  enframe() %>% 
+  set_names(c("ps_transect_id", "H")) %>% 
+  mutate(richness = specnumber(n_ind_data_wide),
+         evenness = H/log(richness))
+
+transect_summary <- transect_summary %>% 
+  left_join(diversity_by_transect) %>% 
+  mutate_if(is.numeric, round, 2) %>% 
+  ungroup() %>% 
+  arrange(ps_transect_id)
+
+transect_summary <- transect_summary |> 
+  left_join(uvs_meta)
+
+strata_summary <- transect_summary %>% 
+  left_join(uvs_meta %>% 
+              dplyr::select(sublocation, ps_sample_id, ps_station_id, habitat, site_name, ps_sample_id, depth_strata)) %>% 
+  group_by(sublocation, site_name, habitat, ps_station_id, ps_sample_id, depth_strata) %>% 
+  summarize(across(c(n_taxa, H, n_ind, ind_m2, gr_m2), mean)) %>% 
+  ungroup() %>% 
+  arrange(ps_station_id)
+
+station_summary <- transect_summary %>% 
+  left_join(uvs_meta %>% 
+              dplyr::select(sublocation, ps_sample_id, ps_station_id, habitat, site_name)) %>% 
+  group_by(sublocation, site_name, habitat, ps_station_id) %>% 
+  summarize(across(c(n_taxa, H, n_ind, ind_m2, gr_m2), mean)) %>% 
+  ungroup() %>% 
+  arrange(ps_station_id)
+
+
+station_summary |> 
+  select(ps_station_id, region = sublocation, nombre = site_name, n_taxa, H, ind_m2, gr_m2) |> 
+  left_join(biomass_by_station_and_trophic) |> 
+  mutate_if(is.numeric, round, 3) |> 
+  write_csv(file.path(exp_path, "data/primary/output/uvs_fish_station_summary.csv"))
+
+station_summary |> 
+  select(ps_station_id, region = sublocation, nombre = site_name, n_taxa, H, ind_m2, gr_m2) |> 
+  left_join(biomass_by_station_and_trophic) |> 
+  mutate_if(is.numeric, round, 3) |> 
+  left_join(uvs_meta |> distinct(ps_station_id, lon, lat)) |> 
+  st_as_sf(coords = c("lon", "lat"), crs = 4326) |> 
+  st_write(file.path(exp_path, "data/primary/processed/uvs_biomass_by_station.shp"), append = F)
+```
+
+```{r}
+transect_summary |> 
+  ggplot()+
+  geom_boxplot(aes(x = depth_strata, y = gr_m2))
+```
+
+```{r}
+fish_diversity_adonis <- vegan::adonis2(strata_summary %>% 
+                                          select(H) ~ depth_strata + habitat + sublocation, 
+                                        data = strata_summary,
+                                        permutations = 1000,
+                                        by = "margin",
+                                        method = "euclidean")
+```
+
+```{r}
+strata_summary |> 
+  group_by(depth_strata) |> 
+  summarize(mean(gr_m2))
+```
+
+### Region effect 
+
+```{r  eval = T, include = T}
+station_summary |> 
+  select(sublocation, H, ind_m2, gr_m2) |> 
+  pivot_longer(!sublocation) |> 
+  mutate(name = factor(name, levels = c("H","ind_m2", "gr_m2"))) |> 
+  ggplot(aes(fct_rev(sublocation), value, col = sublocation))+
+  geom_boxplot(width = .1, fill = "white", size = .5, outlier.shape = NA, show.legend = F)+
+  gghalves::geom_half_point(aes(col = sublocation),
+                            show.legend = F,
+                            side = "l", 
+                            range_scale = .3, 
+                            alpha = .5, size = 2)+
+  facet_wrap("name", scales = "free_y", 
+             labeller = labeller(name = c(gr_m2 = "Biomass (g/m2)",
+                                          ind_m2 = "Abundancia (ind/m2)",
+                                          H = "Diversidad (Shannons H')")))+
+  #coord_flip()+
+  labs(x="", y = "")
+```
+
+```{r location_summary}
+station_summary %>% 
+  group_by(sublocation) %>% 
+  summarize(across(c(richness = n_taxa, n_ind, ind_m2, gr_m2, H), mean)) |> 
+  left_join(biomass_by_taxa_and_transect %>% 
+              left_join(uvs_meta) %>% 
+              left_join(fish_taxa %>% 
+                          distinct(location, taxon_valid_name, family)) %>% 
+              group_by(sublocation) %>% 
+              summarize(n_taxa = n_distinct(taxon_valid_name[n_ind > 0]),
+                        n_families = n_distinct(family[n_ind > 0])))
+```
+
+```{r}
+fish_biomass_adonis <- vegan::adonis2(strata_summary %>% 
+                                          select(gr_m2) ~   depth_strata + habitat + sublocation, 
+                                        data = strata_summary,
+                                        permutations = 1000,
+                                        by = "margin",
+                                        method = "euclidean")
+```
+
+```{r}
+biomass_by_taxa_sublocation <- biomass_by_taxa_and_transect |>
+  left_join(uvs_meta %>% 
+              dplyr::select(sublocation, ps_sample_id, ps_station_id)) |> 
+  ungroup() |> 
+  group_by(sublocation, taxon_valid_name) |> 
+  summarize(freq_obs = 100*n_distinct(ps_station_id[n_ind > 0])/n_stations, 
+            ind_m2 = mean(ind_m2),
+            gr_m2 = mean(gr_m2)) |> 
+  ungroup() |> 
+  mutate(ird = freq_obs*ind_m2/sum(ind_m2)) 
+
+library(RColorBrewer)
+# Define the number of colors you want
+nb.cols <- 16
+mycolors <- colorRampPalette(paletteer_d("tidyquant::tq_light"))(6)
+                           
+biomass_by_taxa_sublocation |> 
+  left_join(fish_taxa) |> 
+  mutate(captura = case_when(is.na(objetivo) ~ "No",
+                            !is.na(objetivo) ~ "Si")) |> 
+  group_by(sublocation, captura) |>
+  summarize(gr_m2 = sum(gr_m2)) |> 
+  ggplot()+
+  geom_col(aes(x = sublocation, y = gr_m2, fill = captura))+
+  coord_flip()+ 
+  scale_fill_manual(values = paletteer_d("ggthemes::colorblind"))+
+  labs(x = "", y = "", fill = "")+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(ncol=1))+
+  theme(legend.position = "right")
+  
+ggsave(file.path(exp_path, "figures", "tribuga_uvs_fish_biomass_by_objetivo.png"), width = 10)
+
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "tribuga_uvs_fish_biomass_by_objetivo.pdf"), width = 10)
+```
+```{r}
+biomass_by_taxa |> 
+  left_join(fish_taxa |> distinct(taxon_valid_name, objetivo)) |> 
+  filter(!is.na(objetivo)) |> 
+  arrange(desc(gr_m2))
+```
+
+### PCOA
+
+```{r}
+gr_m2_data_wide <- biomass_by_taxa_and_transect %>% 
+  select(ps_transect_id, taxon_valid_name, gr_m2) %>% 
+  pivot_wider(names_from = taxon_valid_name, values_from = gr_m2, values_fill = 0) %>% 
+  column_to_rownames("ps_transect_id") 
+
+gr_m2_dist <- vegan::vegdist(as.matrix(gr_m2_data_wide), 
+                      method = "bray") 
+
+gr_m2_pcoa_c <- dbrda(gr_m2_dist ~ habitat + sublocation + depth_strata, 
+                      data = transect_summary ,
+                      dist = "bray", 
+                      add = "lingoes")
+
+gr_m2_pcoa_c_env_fit <- envfit(gr_m2_pcoa_c, 
+                               transect_summary  %>% 
+                                 select(habitat, sublocation, depth_strata))
+
+gr_m2_pcoa_c_spp_fit <- envfit(gr_m2_pcoa_c, 
+                               gr_m2_data_wide)
+
+gr_m2_pcoa_c_spp_scores <- gr_m2_pcoa_c_spp_fit %>% 
+  scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = gr_m2_pcoa_c_spp_fit$vectors$r,
+         p = gr_m2_pcoa_c_spp_fit$vectors$pvals) %>% 
+  filter(p < 0.05, r > 0.1)
+
+gr_m2_pcoa_c_axis <- BiodiversityR::axis.long(gr_m2_pcoa_c, choices = c(1, 2))
+
+gr_m2_pcoa_c_site_scores <- scores(gr_m2_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_transect_id") %>% 
+  inner_join(transect_summary)
+
+anova(gr_m2_pcoa_c) # overall test of the significant of the analysis
+anova(gr_m2_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(gr_m2_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. variables
+
+(gr_m2_adonis <- adonis2(gr_m2_dist ~  habitat  + sublocation + depth_strata,
+        data = transect_summary,
+        #strata = transect_summary[transect_summary$n_ind > 10, ]$ps_station_id,
+        by = "margin"))
+
+community_pcoa_plots <- map(c("sublocation"), 
+    ~ ggplot() +
+      geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+      geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+      scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+      scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+      geom_point(data = gr_m2_pcoa_c_site_scores,
+                 aes(x = dbRDA1, y = dbRDA2,, col = .data[[.x]])) +
+      labs(x = gr_m2_pcoa_c_axis$label[1], y = gr_m2_pcoa_c_axis$label[2])+
+      geom_segment(data = gr_m2_pcoa_c_spp_scores %>% 
+                     filter(p < 0.05, r > 0.5), 
+                   aes(x = 0, y = 0, xend = dbRDA1*3, yend = dbRDA2*3, alpha = r), 
+                   colour = "black", 
+                   size = 0.2, 
+                   arrow = arrow(length = unit(0.01, "npc"), 
+                                 type = 'open', ends = "last"))+
+      ggrepel::geom_text_repel(data = gr_m2_pcoa_c_spp_scores %>% 
+                                 filter(p < 0.05, r > 0.5), 
+                               aes(x=dbRDA1*3, y=dbRDA2*3, label = ps_taxon_code, alpha = r),
+                               colour="black",
+                               show.legend = F) +
+      coord_fixed(ratio=1)+
+      labs(color = "", alpha = bquote('R'^'2'))+
+      ggforce::geom_mark_ellipse(data = gr_m2_pcoa_c_site_scores, 
+                                 aes(x=dbRDA1, y = dbRDA2, colour = .data[[.x]], 
+                                     fill=after_scale(alpha(colour, 0.01))), 
+                                 expand=0, size=0.2, show.legend=FALSE)+
+      theme(panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_line("gray25"),
+            text = element_text(size = 12, family = "Arial"),
+            axis.text = element_text(size = 10, colour = "gray25"),
+            axis.title = element_text(size = 12, colour = "gray25"),
+            legend.key = element_blank())+
+      PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+      scale_alpha(range=c(0.6,1)))
+```
+

@@ -87,7 +87,6 @@ dscm_meta <- dscm_meta %>%
             notes = deployment_remarks,
             team_lead = "Whitney Goodell")
 
-
 dscm_meta <- dscm_meta %>% 
   mutate(sublocation = if_else(location == "Golfo de Tribuga",
                                case_when(ps_station_id %in% cabo_stations ~ "Cabo Corrientes",
@@ -356,6 +355,7 @@ birds_meta <- birds_meta %>%
 
 write_csv(birds_meta, file.path(ps_exp_path, "data", "primary", "processed/metadata", "birds_meta.csv"))
 ```
+
 ## Underwater visual surveys
 
 ```{r}
@@ -706,6 +706,7 @@ bruvs_meta <- bruvs_meta %>%
 write_csv(bruvs_meta, file.path(ps_exp_path, 
                                 "data", "primary", "processed/metadata", "bruvs_meta.csv"))
 ```
+
 
 ## Shark tags
 

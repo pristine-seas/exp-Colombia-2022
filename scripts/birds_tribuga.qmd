@@ -1,0 +1,229 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Fish Surveys"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+options(scipen=999)
+library(vegan)
+library(sf)
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(paletteer)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+birds_fieldsheet <- readxl::read_xlsx(file.path(exp_path,
+                                            "data/primary/raw/birds",
+                                            "Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                                sheet = "Transect meta") %>% 
+  janitor::clean_names() %>% 
+  filter(location == "Tribuga") 
+
+birds_meta <- birds_fieldsheet %>% 
+  transmute(location, sublocation, ps_station_id, 
+            method = "Seabird transects",
+            habitat = if_else(str_detect(sublocation, "mangroves"), "Mangroves", "Coast"),
+            date = ymd(date),
+            time_start = hms::as_hms(time_start),
+            duration_mins,
+            lat_start,
+            long_start,
+            lat_stop = as.numeric(lat_stop),
+            long_stop,
+            distance_km, 
+            paired_pelagic, 
+            string, 
+            drop_pickup, 
+            vessel, 
+            observer = "Chris Thompson") |> 
+  select(-sublocation)
+
+metadata_tribuga <- read_csv(file.path(exp_path, "data", "primary", "processed/metadata", "exp_meta.csv")) |>
+  filter(location == "Golfo de Tribuga") |> 
+  filter(str_detect(method, "bird")) |> 
+  distinct(ps_station_id, sublocation)
+
+birds_meta <- birds_meta |> 
+  left_join(metadata_tribuga |> 
+              distinct(sublocation, ps_station_id)) |> 
+  select(location, sublocation, everything())
+
+bird_transects <- readxl::read_xlsx(file.path(exp_path, 
+                            "data/primary/raw/birds/",
+                            "Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                  sheet = "Transect meta") %>% 
+  filter(Location == "Tribuga") %>% 
+  dplyr::select(-c(1:16)) %>% 
+  mutate_all(as.numeric) %>% 
+  mutate(ps_station_id = birds_meta$ps_station_id,
+         sublocation = birds_meta$sublocation) %>% 
+  pivot_longer(-c("ps_station_id", "sublocation"), names_to = "taxa", values_to = "n_ind") |> 
+  mutate(taxa = if_else(str_detect(taxa, "red-footed"), "Red footed booby", taxa)) %>% 
+  group_by(sublocation, ps_station_id, taxa) %>% 
+  summarize(n_ind = sum(n_ind)) |> 
+  ungroup() |> 
+  #filter(n_ind > 0) |> 
+  dplyr::select(sublocation, everything()) %>% 
+  rename(common_name = taxa) %>% 
+  mutate(common_name = str_to_sentence(common_name))
+
+bird_transects <- bird_transects |> 
+  pivot_wider(names_from = common_name, values_from = n_ind, values_fill = 0) |> 
+  pivot_longer(-c(sublocation, ps_station_id),
+                names_to = "common_name", values_to = 'n')
+
+bird_taxa <- readxl::read_xlsx(file.path(exp_path, 
+                            "data/primary/raw/birds/",
+                            "Colombia_Seabirds_Fieldsheet_2022_05_17_lat_longs updated.xlsx"), 
+                  sheet = "Species Tribuga") |> 
+  janitor::clean_names() |> 
+  rename(common_name = taxa) %>% 
+  mutate(common_name = str_to_sentence(common_name))
+
+bird_taxa$binomial[bird_taxa$common_name == "Galapagos storm-petrel"] <- "Oceanodroma tethys"
+
+birds_taxa_gbif <- bdc::bdc_query_names_taxadb(unique(bird_taxa$binomial),
+                                         replace_synonyms = TRUE,
+                                         suggest_names = TRUE,
+                                         suggestion_distance = 0.8,
+                                         db = "gbif",
+                                         parallel = TRUE,
+                                         ncores = 2,
+                                         export_accepted = FALSE) %>% 
+  janitor::clean_names()
+
+bird_taxa <- bird_taxa |> 
+  left_join(birds_taxa_gbif |> select(binomial = original_search, family, order)) |> 
+  select(order, family, binomial, common_name, nombre_comun)
+```
+
+```{r}
+bird_transects <- bird_transects |> 
+  left_join(bird_taxa |> 
+              distinct(common_name, nombre_comun, binomial, family)) 
+
+bird_transects$nombre_comun[bird_transects$common_name == "Storm-petrel sp"] <- "Petreles de tormenta"
+bird_transects$binomial[bird_transects$common_name == "Storm-petrel sp"] <- "Hydrobatidae"
+bird_transects$family[bird_transects$common_name == "Storm-petrel sp"] <- "Hydrobatidae"
+
+bird_transects <- bird_transects |> 
+  left_join(birds_meta |> distinct(ps_station_id, habitat))
+
+transect_summary <- bird_transects |> 
+  group_by(sublocation, habitat, ps_station_id) |> 
+  summarise(n_taxa = n_distinct(binomial[n > 0]),
+            n_ind = sum(n))
+
+transect_summary |> 
+  group_by(sublocation, habitat) |> 
+  summarize(mean(n_taxa), 
+            mean(n_ind),
+            sum(n_ind))
+```
+
+```{r}
+transect_summary |> 
+  mutate(t = paste(sublocation, habitat) |> 
+           str_remove_all("Coast") |> 
+           str_replace("Mangroves", "- Manglares")) |> 
+  ggplot()+
+  geom_boxplot(aes(t, n_taxa), fill = "pink")+
+    scale_fill_manual(values = paletteer_d("ggthemes::colorblind"))+
+  labs(x = "", y = "", fill = "")+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(ncol=1))+
+  theme(legend.position = "right") 
+
+ggsave(file.path(exp_path, "figures/birds_boxplot_n_taxa.png"), width = 10)
+ggsave(file.path(exp_path, "figures/birds_boxplot_n_taxa.pdf"), width = 10)
+
+transect_summary |> 
+  mutate(t = paste(sublocation, habitat) |> 
+           str_remove_all("Coast") |> 
+           str_replace("Mangroves", "- Manglares")) |> 
+  ggplot()+
+  geom_boxplot(aes(t, n_ind), fill = "lightblue")+
+    scale_fill_manual(values = paletteer_d("ggthemes::colorblind"))+
+  labs(x = "", y = "", fill = "")+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(ncol=1))+
+  theme(legend.position = "right") 
+
+ggsave(file.path(exp_path, "figures/birds_boxplot_n_ind.png"), width = 10)
+ggsave(file.path(exp_path, "figures/birds_boxplot_n_ind.pdf"), width = 10)
+
+```
+
+```{r}
+bird_transects |> 
+  group_by(habitat) |> 
+  summarize(n_surveys = n_distinct(ps_station_id),
+            n_ind = sum(n),
+            n_taxa = n_distinct(binomial[n > 0])) 
+```
+
+
+
+
+
+```{r}
+summary_by_taxa_and_habitat <- bird_transects |> 
+  left_join(birds_meta |> distinct(ps_station_id, habitat)) |> 
+  group_by(habitat, nombre_comun, binomial, family) |> 
+  summarize(sum_n = sum(n),
+            mean_n = mean(n), 
+            frq = 100*n_distinct(ps_station_id[n > 0 ])/n_distinct(ps_station_id)) |> 
+  mutate_if(is.numeric, round, 2) |> 
+  ungroup()
+
+summary_by_taxa_and_habitat |> 
+   pivot_wider(names_from = habitat, 
+                          values_from = c(sum_n, mean_n, frq),
+                          names_glue = "{habitat}.{.value}") |> 
+  select(family, nombre_comun, binomial, contains("Coast"), contains("Mang")) |> 
+  ungroup() |> 
+  gt::gt() |> 
+  gt::tab_spanner_delim(delim = ".") |> 
+  gt::tab_header(title = "Aves marinas registradas durante transectos visuales en los manglares y aguas costeras del Golfo de Tribugá") |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/Tables/birds.docx"))
+```
+
+
+```{r}
+summary_by_taxa_and_habitat |> 
+  group_by(family) |> 
+  summarize(n = n_distinct(binomial)) |> 
+  arrange(desc(n))
+```
+
+```{r}
+summary_by_taxa_and_habitat |> 
+  group_by(habitat) |> 
+  summarize(n_distinct(binomial[sum_n > 0]))
+  distinct(binomial)
+  filter(habitat)
+```
+

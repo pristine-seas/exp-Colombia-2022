@@ -1,0 +1,1037 @@
+---
+title: "Colombia - Golfo de Tribugá"
+subtitle: "Benthic Surveys"
+author: "Juan Mayorga"
+number-sections: true
+date: "5/22/2021"
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: left
+---
+
+```{r, message=F, warning = F, fig.width=10, fig.height=10}
+options(scipen=999)
+library(vegan)
+library(sf)
+library(leaflet)
+library(reactable)
+library(tidyverse)
+library(paletteer)
+library(lubridate)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+load(file = file.path(exp_path, "data", 
+                      "secondary", "processed", "admin_spatial_layers.RData"))
+```
+
+```{r}
+site_names <- readxl::read_excel(file.path(exp_path,
+                                           "data/primary/raw/fish/tribuga_fish_metadata.xlsx")) %>% 
+  janitor::clean_names() |> 
+  mutate(ps_station_id = str_replace_all(ps_station_id, "fish", "uvs")) |> 
+  select(ps_station_id, site_name)
+
+uvs_meta <-  read_csv(file.path(exp_path, "data/primary/processed/metadata/uvs_meta.csv")) %>%
+  filter(str_detect(ps_sample_id,"fish"), 
+         location == "Golfo de Tribuga") |> 
+  left_join(site_names) |> 
+  mutate(depth_strata = cut(depth_m, breaks = c(0, 14.9, Inf), labels = c("Shallow", "Deep")))
+```
+
+# Data clean up
+
+```{r read_benthos_data}
+pc_transects <- readxl::read_xlsx(file.path(exp_path,
+                                            "data/primary/raw/inverts/COL_contacts_fieldsheet.xlsx"),
+                                  sheet = "data",
+                                  n_max = 3, 
+                                  col_names = FALSE) %>%
+  janitor::clean_names() %>%
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  janitor::clean_names() |> 
+  set_names(c("station_number", "depth_m", "transect")) |> 
+  group_by(station_number) |> 
+  mutate(depth_m = as.numeric(depth_m),
+         depth_strata = if_else(min(depth_m) == depth_m, "Shallow", "Deep")) |> 
+  ungroup() |> 
+  transmute(ps_station_id = paste0("COL_uvs_", 
+                                formatC(parse_number(station_number), 
+                                        width = 2, 
+                                        flag = 0)),
+            transect_type = "Point contact",
+            diver = "KB",
+            depth_strata,
+            depth_m = depth_m,
+            transect)
+
+pc_data <- readxl::read_xlsx(file.path(exp_path,
+                                       "data/primary/raw/inverts/COL_contacts_fieldsheet.xlsx"),
+                             skip = 3, 
+                             col_names = F, 
+                             sheet = "data",
+                             range = "A5:EK55") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(x1), x1 != "TOTAL") %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+pc_data <- pc_transects |> 
+  cbind(pc_data) %>% 
+  pivot_longer(-c(ps_station_id, transect_type, diver, depth_strata, depth_m, transect), 
+               names_to = "taxon", 
+               values_to = "pts") %>% 
+  replace_na(list(pts = 0)) %>% 
+  group_by(ps_station_id, diver, depth_strata, depth_m, transect, taxon) %>% 
+  summarise(pts = sum(pts)) %>% 
+  ungroup() %>% 
+  group_by(ps_station_id, diver, depth_strata, depth_m, transect) |> 
+  mutate(p_cover = round(100*pts/sum(pts), 4)) %>% 
+  ungroup()
+```
+
+```{r benthos_qa/qc}
+pc_data %>% 
+  group_by(ps_station_id, depth_strata, transect) %>% 
+  summarise(p_cover = round(sum(p_cover)),
+            sum_pts = sum(pts)) %>% 
+  filter(p_cover != 100 | sum_pts != 50)
+
+pc_transects %>% 
+  group_by(ps_station_id, depth_m) %>% 
+  filter(n_distinct(transect) != 5)
+
+pc_data %>% 
+  filter(is.na(taxon))
+```
+
+```{r read_taxa}
+kikes_taxonomy <- readxl::read_xlsx(file.path(exp_path,
+                                              "data/primary/raw/inverts/COL_contacts_fieldsheet.xlsx"),
+                                    sheet = "All species") %>% 
+  janitor::clean_names() 
+
+benthos_taxa <- pc_data %>% 
+  distinct(taxon) |> 
+  filter(!taxon %in% c("Barren","Sediment", "Sediment over rock", "Turf"))
+
+benthos_taxa |> 
+  filter(!taxon %in% kikes_taxonomy$species)
+
+kikes_taxonomy |> 
+  filter(!species %in% benthos_taxa$taxon)
+
+benthos_taxa <- bdc::bdc_clean_names(c("CCA",kikes_taxonomy$species)) %>% 
+  janitor::clean_names() %>% 
+  select(taxon = scientific_name, 
+         taxon_clean = names_clean) %>% 
+  mutate(taxon_clean = coalesce(taxon_clean, 
+                                taxadb::clean_names(taxon, lowercase = F))) %>% 
+  distinct(taxon, taxon_clean) %>% 
+  mutate(taxon_clean = str_remove_all(taxon_clean,
+                                      "unidentified|Unidentified|white|smooth|encrusting"),
+         taxon_clean =  case_when(str_detect(taxon, "sponge|Sponge|Porifera|Sorrenca") ~ "Porifera",
+                                  TRUE~ taxon_clean) %>% 
+           str_squish())
+
+benthos_taxa$taxon_clean[benthos_taxa$taxon == "CCA"] <- "Corallinales"
+benthos_taxa$taxon_clean[benthos_taxa$taxon == "Unidentified white nudibranch"] <- "Chromododiridae"
+benthos_taxa$taxon_clean[benthos_taxa$taxon_clean == "Rhodymenia big"] <- "Rhodymenia"
+benthos_taxa$taxon_clean[benthos_taxa$taxon == "Gulsonia-like"] <- "Gulsonia"
+benthos_taxa$taxon_clean[benthos_taxa$taxon_clean == "Halymenia bis"] <- "Halymenia"
+benthos_taxa$taxon_clean[str_detect(benthos_taxa$taxon, "bryozoan")] <- "Bryozoan"
+benthos_taxa <- benthos_taxa |> filter(taxon != "Dictyota big")
+
+benthos_taxa <- benthos_taxa |> 
+  left_join(kikes_taxonomy |> 
+              select(taxon = species, category)) 
+
+benthos_taxa$category[benthos_taxa$taxon == "CCA"] <- "CCA"
+
+benthos_taxa %>% 
+  filter(taxon != taxon_clean)
+
+benthos_taxa <- benthos_taxa |> 
+  mutate(grupo = case_when(taxon == "CCA" ~ "CCA",
+                           category == "erect invertebrate" ~ "Invertebrado erecto",
+                           category == "encrusting invertebrate" ~ "Invertebrado incrustante",
+                           category == "encrusting algae" ~ "Alga incrustante",
+                           category == "erect algae" ~ "Alga erecta",
+                           category == "vagile" ~ "Invertebrado móvil",
+                           category == "soft coral" ~ "Coral blando",
+                           category == "hard coral" ~ "Coral duro",
+                           category == "turf" ~ "Césped algal"))
+```
+
+```{r gnr_benthos}
+algae_taxa <- benthos_taxa %>% 
+  inner_join(kikes_taxonomy %>% 
+               filter(phylum %in%
+                        unique(kikes_taxonomy$phylum[str_detect(kikes_taxonomy$category,
+                                                                "algae|plant")])) %>% 
+               select(phylum, species),
+             by = c("taxon"="species"))
+
+algae_gnr <-   taxize::gnr_resolve(algae_taxa$taxon_clean, 
+                      canonical = F,
+                      with_canonical_ranks = T,
+                      data_source_ids = c(195)) %>% # ALGAE BASE
+  filter(submitted_name != matched_name2) %>% 
+  distinct(submitted_name, score, taxon_gnr = matched_name2)
+
+not_algae_gnr <- benthos_taxa %>% 
+  filter(!taxon_clean %in% algae_taxa$taxon_clean) %>% 
+  pull(taxon_clean) %>% 
+  taxize::gnr_resolve(canonical = F,
+                      with_canonical_ranks = T,
+                      data_source_ids = c(9)) %>% # WORMS 
+  filter(submitted_name != matched_name2) %>% 
+  distinct(submitted_name, score, taxon_gnr = matched_name2)
+
+benthos_taxa <- benthos_taxa %>% 
+  left_join(not_algae_gnr,
+            by = c("taxon_clean" = "submitted_name")) %>% 
+  mutate(taxon_gnr = coalesce(taxon_gnr, taxon_clean)) %>% 
+  select(-score) %>% 
+  left_join(algae_gnr %>% 
+              rename(taxon_gnr_algae = taxon_gnr),
+            by = c("taxon_clean" = "submitted_name")) %>% 
+  mutate(taxon_gnr = coalesce(taxon_gnr_algae, taxon_gnr)) %>% 
+  select(-score, -taxon_gnr_algae) 
+```
+
+```{r taxonomy_benthos}
+taxonomy_worms <- benthos_taxa$taxon_gnr %>% 
+  furrr::future_map(purrr::safely(worrms::wm_records_names))
+  
+taxonomy_worms <- transpose(taxonomy_worms)[["result"]] %>% 
+  bind_rows() %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(scientificname)) %>% 
+  mutate(rank = str_to_lower(rank),
+         taxon_id = if_else(!is.na(valid_aphia_id),
+                              paste0("WORMS:", valid_aphia_id),
+                              NA_character_)) %>% 
+  select(taxon_gnr = scientificname, status, taxon_valid_name = valid_name, taxon_rank = rank, taxon_id, taxon_authority = valid_authority, kingdom, phylum, class, order, family, genus) %>% 
+  distinct() 
+
+duped_taxa_worms <- taxonomy_worms %>% 
+  janitor::get_dupes(taxon_gnr) 
+
+deduped_taxa_worms <- duped_taxa_worms %>% 
+  filter(status %in% c("accepted", "junior subjective synonym")) %>% 
+  select(-dupe_count)
+
+taxonomy_worms <- taxonomy_worms %>% 
+  group_by(taxon_gnr) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_taxa_worms) # add deduped
+
+taxonomy_worms %>% 
+  filter(taxon_valid_name != taxon_gnr) 
+
+benthos_taxa <- benthos_taxa %>% 
+  left_join(taxonomy_worms) %>% 
+  select(-taxon_clean)
+
+benthos_taxa |> 
+  filter(is.na(class))
+
+benthos_taxa |> 
+  filter(is.na(taxon_valid_name))
+```
+
+```{r}
+benthos_taxa$taxon_valid_name[is.na(benthos_taxa$taxon_valid_name)] <- benthos_taxa$taxon[is.na(benthos_taxa$taxon_valid_name)]
+```
+
+```{r benthic_group}
+benthos_taxa |> 
+  group_by(category) |> 
+  summarize(n())
+```
+
+```{r iucn_benthos}
+iucn_db <- read_csv(file.path(ps_data_path, 
+                              "iucn-redlist-marine-species",  
+                              "joined_and_resolved_taxa.csv"))
+  
+iucn_db <- iucn_db %>% 
+  filter(taxon_valid_name %in% benthos_taxa$taxon_valid_name) %>% 
+  distinct(taxon_valid_name, iucn_redlist_cat, iucn_trend)  
+  
+duped_iucn_db <- iucn_db %>% 
+  janitor::get_dupes(taxon_valid_name)
+
+deduped_iucn_db <- duped_iucn_db %>% 
+  filter(iucn_redlist_cat %in% c("Vulnerable", "Least Concern"))%>% 
+  select(-dupe_count)
+
+iucn_db <- iucn_db %>% 
+  group_by(taxon_valid_name) %>% 
+  filter(n() <= 1) %>% # remove duplicates
+  bind_rows(deduped_iucn_db) # add deduped
+
+benthos_taxa <- benthos_taxa %>% 
+  left_join(iucn_db)
+
+benthos_taxa %>% 
+  group_by(iucn_redlist_cat) %>% 
+  summarize(n_distinct(taxon_id))
+```
+
+```{r common_names_benthos}
+worms_common_names <- benthos_taxa %>% 
+  filter(str_detect(taxon_id, "WORMS")) %>% 
+  transmute(worms_id = as.numeric(str_remove_all(taxon_id, "WORMS:"))) %>% 
+  pull() %>% 
+  worrms::wm_common_id_() %>% 
+  filter(language_code %in% c("eng", "spa")) %>% 
+  mutate(vernacular = str_squish(str_to_sentence(vernacular))) %>% 
+  group_by(id, language_code) %>% 
+  summarise(common_names = paste(vernacular, collapse = ";"))
+
+worms_common_names <- worms_common_names %>% 
+  pivot_wider(names_from = language_code, 
+              names_prefix = "common_name_",
+              values_from = common_names)
+
+worms_common_names$id <- paste0("WORMS:", worms_common_names$id)
+
+benthos_taxa <- benthos_taxa %>% 
+  left_join(worms_common_names, by = c("taxon_id" = "id"))
+
+benthos_taxa <- benthos_taxa %>% 
+  mutate(across(c(taxon_rank), str_to_sentence))
+
+write_csv(benthos_taxa,
+          file.path(exp_path, "data/primary/output", "uvs_benthos_taxa.csv"))
+
+benthos_taxa |> filter(taxon_valid_name != taxon_gnr )
+```
+
+```{r save_benthos}
+pc_data <- pc_data %>% 
+  left_join(benthos_taxa %>% 
+              distinct(taxon, taxon_valid_name)) %>% 
+  select(ps_station_id, diver, depth_strata, depth_m, transect, taxon, taxon_valid_name, pts, p_cover)
+
+pc_data %>% 
+  write_csv(file.path(exp_path, 
+                      "data/primary/processed", "uvs_benthos_pc_clean.csv"))
+```
+
+# Point contacts
+
+```{r include = T, eval = T}
+benthos_taxa <- read_csv(file.path(exp_path, "data/primary/output", "uvs_benthos_taxa.csv"))
+
+cover_by_transect <- read_csv(file.path(exp_path, "data/primary/processed/uvs_benthos_pc_clean.csv"))
+
+cover_by_transect <- cover_by_transect |> 
+  left_join(benthos_taxa |> distinct(taxon, grupo)) |> 
+  mutate(grupo = case_when(taxon == "Sediment" ~ "Sedimento",
+                           taxon == "Turf" ~ "Césped algal",
+                           TRUE ~ grupo),
+         taxon_valid_name = if_else(is.na(taxon_valid_name), taxon, taxon_valid_name))
+
+cover_by_strata <- cover_by_transect |> 
+  group_by(ps_station_id, depth_strata, grupo, taxon_valid_name, taxon) |> 
+  summarise(p_cover = mean(p_cover),
+            pts = sum(pts)) |> 
+  ungroup() 
+
+cover_by_station <- cover_by_transect |> 
+  group_by(ps_station_id, grupo, taxon_valid_name, taxon) |> 
+  summarise(p_cover = mean(p_cover),
+            pts = sum(pts)) |> 
+  ungroup() 
+```
+
+## Diversity
+
+```{r }
+(pc_diversity_by_class <- cover_by_transect |> 
+  filter(!is.na(taxon_valid_name), pts > 0) |> 
+  distinct(grupo, taxon) |> 
+  inner_join(benthos_taxa |> 
+               distinct(taxon, class, family, phylum, order)) |> 
+   filter(!is.na(class)) |> 
+  group_by(phylum, class) %>% 
+  summarise(n_taxa = n_distinct(taxon),
+            n_family = n_distinct(family)) |> 
+  arrange(desc(n_taxa)))
+
+(pc_diversity_by_group <- cover_by_transect |> 
+  filter(!is.na(taxon_valid_name), pts > 0) |> 
+  distinct(taxon, grupo) |> 
+  left_join(benthos_taxa |> 
+               distinct(taxon, class, family, phylum, order)) |> 
+  group_by(grupo) %>% 
+  summarise(n_taxa = n_distinct(taxon),
+            n_family = n_distinct(family)) |> 
+  arrange(desc(n_taxa)))
+
+(pc_diversity_by_family <- cover_by_transect |> 
+  filter(!is.na(taxon_valid_name), pts > 0) |> 
+  distinct(grupo, taxon) |> 
+  inner_join(benthos_taxa |> 
+               distinct(taxon, class, family, phylum, order)) |> 
+  group_by(class, order, family, grupo) %>% 
+  summarise(n_taxa = n_distinct(taxon)) |> 
+  arrange(desc(n_taxa)))
+```
+
+```{r, eval = T, include = T}
+pc_diversity_by_family |> 
+  arrange(desc(n_taxa)) %>% 
+  reactable::reactable(
+    defaultColDef = colDef(
+      header = function(value) gsub("_", " ", value, fixed = TRUE),
+      cell = function(value) format(value, nsmall = 1),
+      align = "center",
+      minWidth = 70,
+      aggregate = "sum",
+      headerStyle = list(background = "#f7f7f8")),
+    bordered = TRUE,
+    highlight = TRUE)%>% 
+  reactablefmtr::add_title(title = "Number of taxa by benthic group")
+```
+
+```{r treemap_benthos, include = T, eval = T, fig.width=9, fig.height=8}
+cover_by_transect |> 
+  filter(!is.na(taxon_valid_name), pts > 0) |> 
+  distinct(taxon) |> 
+  inner_join(benthos_taxa |> 
+               distinct(taxon, grupo, class, family, phylum, order)) |> 
+  group_by(class, grupo) %>% 
+  summarise(n_taxa = n_distinct(taxon),
+            n_family = n_distinct(family)) |> 
+  arrange(desc(n_taxa)) |> 
+  rename(weight = n_taxa) |>
+  filter(!is.na(class)) |> 
+  replace_na(list(class = "Unidentified")) |> 
+  mutate(class = case_when(class == "Anthozoa" ~ "Corales (Anthozoa)",
+                           class == "Demospongiae" ~ "Esponjas (Demospongiae)",
+                           class == "Florideophyceae" ~ "Algas rojas (Florideophyceae)",
+                           class == "Phaeophyceae" ~ "Algas pardas (Phaeophyceae)",
+                           class == "Gastropoda" ~ "Caracoles y babosas (Gastropoda)",
+                           class == "Ascidiacea" ~ "Ascidias (Ascidiacea)",
+                           class == "Bivalvia" ~ "Bivalvos (Bivalvia)",
+                           class == "Hydrozoa" ~ "Hidroides (Hydrozoa)",
+                           TRUE ~ class)) |> 
+  ungroup() |> 
+  ggplot(aes(area = weight, 
+             label = paste(grupo, weight, sep = "\n"),
+             fill = class,
+             subgroup = class)) +
+  treemapify::geom_treemap(show.legend = T, colour = "white")+
+  treemapify::geom_treemap_text(colour = "white", 
+                                place = "middle", 
+                                reflow = T, 
+                                min.size = 3)+
+  labs(fill = "", title = "")+
+  bbplot::bbc_style()+
+  treemapify::geom_treemap_subgroup_border(colour = "white", size = 4)+
+  guides(fill = guide_legend(nrow = 3, byrow = TRUE))+
+  theme(legend.position = "bottom")+
+  paletteer::scale_fill_paletteer_d(palette = "tidyquant::tq_light")
+
+ggsave(file.path(exp_path, "figures", "uvs_benthos_taxa.png"), width = 13, height = 9)
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "uvs_benthos_taxa.pdf"), width = 13, height = 9)
+```
+
+```{r}
+cover_by_strata_wide <- cover_by_strata %>% 
+  mutate(strata_id = paste(ps_station_id, depth_strata, sep = "-")) |> 
+  select(strata_id, taxon, p_cover) %>% 
+  pivot_wider(names_from = taxon, values_from = p_cover, values_fill = 0) |> 
+  column_to_rownames("strata_id")
+
+strata_summary <- cover_by_strata_wide |> 
+  vegan::diversity() %>% 
+  enframe() %>% 
+  set_names(c("strata_id", "H"))  |> 
+  mutate(richness = vegan::specnumber(cover_by_strata_wide),
+         evenness = H/log(richness)) %>% 
+  mutate_if(is.numeric, round, 2) |> 
+  separate(strata_id, c("ps_station_id", "depth_strata"), sep = "-") |> 
+  left_join(uvs_meta %>% 
+              distinct(ps_station_id, sublocation, site_name, habitat))
+```
+
+```{r}
+strata_summary |> 
+  ggplot()+
+  geom_boxplot(aes(depth_strata, richness))
+
+strata_summary |> 
+  mutate(label = if_else(depth_strata == "Shallow", 
+                         "Somero",
+                         "Profundo")) |> 
+  ggplot()+
+  geom_boxplot(aes(label, H), fill = "lightblue")+
+  labs(y = "", x = "")+
+  bbplot::bbc_style()
+  
+ggsave(file.path(exp_path, "figures", "tribuga_diversity_by_depth.png"), width = 10)
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "benthos_diversity_by_depth.pdf"), width = 10)
+```
+
+```{r include = T, eval = T}
+pc_H_adonis <- vegan::adonis2(strata_summary %>% 
+                                     select(H) ~  depth_strata + sublocation + habitat,
+                                   data = strata_summary, permutations = 1000,
+                                   #strata = strata_summary$ps_station_id,
+                                   by = "margin",
+                                   method = "euclidean")
+
+broom::tidy(pc_H_adonis) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  reactable::reactable(defaultColDef = reactable::colDef(
+    header = function(value) gsub("_", " ", value, fixed = TRUE),
+    cell = function(value) format(value, nsmall = 1),
+    align = "center",
+    minWidth = 70,
+    aggregate = "sum",
+    headerStyle = list(background = "#f7f7f8")),
+    bordered = TRUE,
+    highlight = TRUE) %>% 
+  reactablefmtr::add_title(title = "Benthic species diversity (H, richness) - Adonis model")
+```
+
+```{r}
+strata_summary |> 
+  ggplot()+
+  geom_boxplot(aes(fct_reorder(sublocation, H), H), fill = "lightblue")+
+  labs(y = "", x = "")+
+  bbplot::bbc_style()
+  
+ggsave(file.path(exp_path, "figures", "tribuga_diversity_by_region.png"), width = 10)
+ggsave(file.path(exp_path, "reports/Tribuga/Assets", "tribuga_diversity_by_region.pdf"), width = 10)
+```
+
+```{r}
+cover_by_station_wide <- cover_by_station %>% 
+  select(ps_station_id, taxon, p_cover) %>% 
+  pivot_wider(names_from = taxon, values_from = p_cover, values_fill = 0) |> 
+  column_to_rownames("ps_station_id")
+
+station_summary <- cover_by_station_wide |> 
+  vegan::diversity() %>% 
+  enframe() %>% 
+  set_names(c("ps_station_id", "H"))  |> 
+  mutate(richness = vegan::specnumber(cover_by_station_wide),
+         evenness = H/log(richness)) %>% 
+  mutate_if(is.numeric, round, 2) |> 
+  left_join(uvs_meta %>% 
+              distinct(ps_station_id, sublocation, habitat))
+```
+
+```{r include = T, eval = T}
+benthos_H_adonis <- vegan::adonis2(station_summary %>% 
+                                     select(H, richness) ~ sublocation + habitat, 
+                                   data = station_summary,
+                                   #strata = pc_transect_summary$ps_site_id,
+                                   by = "margin",
+                                   method = "euclidean")
+
+broom::tidy(benthos_H_adonis) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  reactable::reactable(defaultColDef = reactable::colDef(
+    header = function(value) gsub("_", " ", value, fixed = TRUE),
+    cell = function(value) format(value, nsmall = 1),
+    align = "center",
+    minWidth = 70,
+    aggregate = "sum",
+    headerStyle = list(background = "#f7f7f8")),
+    bordered = TRUE,
+    highlight = TRUE) %>% 
+  reactablefmtr::add_title(title = "Benthic species diversity (H, richness) - Adonis model")
+```
+
+## Cover
+
+### By group 
+
+```{r}
+cover_by_station_and_group <- cover_by_station |> 
+  group_by(ps_station_id, grupo) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  pivot_wider(values_from = p_cover, names_from = grupo)
+
+station_summary <- uvs_meta |> 
+  distinct(ps_station_id, sublocation, habitat, site_name, lat, lon) |> 
+  left_join(station_summary) |> 
+  left_join(cover_by_station_and_group)
+
+station_summary |> 
+  select(-lat, -lon) |> 
+  write_csv(file.path(exp_path, "data/primary/processed/pc_station_summary.csv"))
+
+station_summary |> 
+  st_as_sf(coords = c("lon","lat"), crs = 4326) |> 
+  sf::st_write(file.path(exp_path, "data/primary/processed/benthic_cover_by_station.shp"), append = F)
+```
+
+```{r}
+cover_by_group_and_sublocation <- cover_by_station |> 
+  left_join(uvs_meta |> distinct(ps_station_id, sublocation)) |> 
+  group_by(ps_station_id, sublocation, grupo) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  ungroup() |> 
+  group_by(sublocation, grupo) |> 
+  summarize(avg_cover = round(mean(p_cover),3)) |> 
+  arrange(desc(avg_cover)) 
+
+cover_by_station |> 
+  group_by(ps_station_id, grupo) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  ungroup() |> 
+  group_by(grupo) |> 
+  summarize(avg_cover = mean(p_cover)) |> 
+  arrange(desc(avg_cover)) |> 
+  left_join(cover_by_group_and_sublocation |> 
+              pivot_wider(values_from = avg_cover, 
+                          names_from = sublocation))
+```
+```{r}
+benthic_groups <- c(unique(benthos_taxa$grupo), "Sedimento") 
+
+pc_group_palette <- as.character(paletteer_d("ggthemes::Tableau_10",
+                                             n = length(benthic_groups))) 
+
+paletteer_d("ggthemes::Tableau_10")
+
+names(pc_group_palette) <- c("Invertebrado móvil", 
+                             "Césped algal", 
+                             "Coral duro", 
+                             "Coral blando", 
+                             "Invertebrado incrustante", 
+                             "Alga erecta",
+                             "Invertebrado erecto", 
+                             "CCA", 
+                             "Alga incrustante",
+                             "Sedimento")
+```
+
+```{r eval = T, include = T, fig.width = 8}
+cover_by_family_and_group <- cover_by_station |> 
+  left_join(benthos_taxa |> distinct(taxon, family)) |> 
+  group_by(ps_station_id, grupo, family) %>% 
+  summarize(p_cover = sum(p_cover)) %>% 
+  ungroup() |> 
+  mutate(family = coalesce(family, grupo)) |> 
+  group_by(grupo, family) %>% 
+  summarize(mean_p_cover = round(mean(p_cover), 0)) %>% 
+  ungroup()
+
+cover_by_family_and_group$family[cover_by_family_and_group$family == "Césped algal"] <- "Turf"
+
+cover_by_family_and_group |> 
+  ggplot(aes(area = mean_p_cover, 
+             label = paste(family, paste0(mean_p_cover, "%"),  sep = "\n"),
+             fill = grupo,
+             subgroup = grupo)) +
+  treemapify::geom_treemap(show.legend = T)+
+  treemapify::geom_treemap_text(colour = "white", place = "middle", reflow = T, min.size = 3)+
+  labs(fill = "",
+       title = "")+
+    scale_fill_manual(values = pc_group_palette)+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(nrow=3,byrow=TRUE))+
+  theme(legend.position = "bottom")
+
+ggsave(file.path(exp_path, "figures", "tribuga_uvs_benthos_cover_treemap.png"), width = 13, height = 8)
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "tribuga_uvs_benthos_cover_treemap.pdf"), width = 13, height = 8)
+```
+
+```{r}
+cover_by_group_and_sublocation |> 
+  ggplot()+
+  geom_col(aes(sublocation, avg_cover, fill = fct_reorder(grupo, avg_cover)))+
+  bbplot::bbc_style()+
+  guides(fill = guide_legend(nrow=3,byrow=TRUE))+
+  theme(legend.position = "bottom")+
+  labs(y = "%") + 
+    scale_fill_manual(values = pc_group_palette)
+
+ggsave(file.path(exp_path, "figures", "tribuga_uvs_benthos_cover_by_region.png"), width = 13, height = 8)
+ggsave(file.path(exp_path, "reports/Tribuga/assets", "tribuga_uvs_benthos_cover_by_region.pdf"), width = 13, height = 8)
+```
+
+```{r}
+cover_by_station |> 
+  group_by(ps_station_id, grupo) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  ggplot()+
+  geom_col(aes(ps_station_id, y = p_cover, fill = grupo))+
+  coord_flip()+
+  scale_fill_manual(values = pc_group_palette)
+```
+
+### By taxa
+
+```{r}
+summary_by_taxa <- cover_by_station |> 
+  group_by(taxon) |> 
+  summarize(freq_obs = 100*n_distinct(ps_station_id[pts>0])/n_distinct(ps_station_id),
+            avg_p_cover = mean(p_cover)) |>
+  arrange(desc(taxon)) |> 
+  ungroup() |> 
+  left_join(benthos_taxa %>% 
+              select(taxon, grupo, order, class, family)) |>
+  mutate(taxon = coalesce(taxon, grupo),
+         order = coalesce(order, grupo),
+         grupo = coalesce(grupo, taxon)) |> 
+  mutate(grupo = case_when(stringr::str_detect(grupo, "Sediment") ~ "Sedimento",
+                           TRUE ~ grupo)) |> 
+  mutate_if(is.numeric, round, 2) |> 
+  arrange(desc(avg_p_cover)) 
+
+summary_by_taxa |> 
+  select(grupo, orden = order, clase = class, familia = family, taxon, 
+         frecuencia_observacion = freq_obs, cobertura_media = avg_p_cover) |> 
+  write_csv(file.path(exp_path, "reports/Tribuga/supplement/SM2_uvs_pc_taxa_summary.csv"))
+
+summary_by_taxa |> 
+  select(grupo, class, taxon, freq_obs, avg_p_cover) |> 
+  arrange(desc(avg_p_cover)) |> 
+  reactable::reactable(
+    defaultColDef = colDef(
+      header = function(value) gsub("_", " ", value, fixed = TRUE),
+      cell = function(value) format(value, nsmall = 1),
+      align = "center",
+      minWidth = 70,
+      aggregate = "sum",
+      headerStyle = list(background = "#f7f7f8")),
+    bordered = TRUE,
+    highlight = TRUE)
+
+library(gt)
+
+summary_by_taxa |> 
+  select(grupo, class, family ,taxon, freq_obs, avg_p_cover) |>
+  arrange(desc(avg_p_cover)) |> 
+  group_by(grupo) |> 
+  slice_max(avg_p_cover, n = 3) |> 
+  filter(!grupo %in% c("Barren", "Sediment")) |> 
+  ungroup() |> 
+  gt() |> 
+    tab_header(
+    title = "Frequency of observation (% sites) and average cover (%) for the most representative taxa in each functional group") |> 
+  cols_label(
+    grupo = "Groupo morfológico",
+    class = "Clase",
+    family = "Familia",
+    taxon = "Taxón",
+    freq_obs = "Frecuencia de observación (% sitios)",
+    avg_p_cover = "Cobertura promedio (%)") |> 
+  tab_style(style = list(
+      cell_text(style = "italic")),
+    locations = cells_body(columns = taxon)) |> 
+  gt::gtsave(file.path(exp_path, "reports/Tribuga/tables/tbl_benthos_taxa_summary.docx"))
+```
+
+```{r}
+cover_by_taxa_and_sublocation <- cover_by_station |> 
+  left_join(uvs_meta |> distinct(ps_station_id, sublocation)) |> 
+  group_by(ps_station_id, sublocation, taxon_valid_name) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  ungroup() |> 
+  group_by(sublocation, taxon_valid_name) |> 
+  summarize(avg_cover = round(mean(p_cover),3)) |> 
+  arrange(desc(avg_cover)) 
+
+cover_by_station |> 
+  group_by(ps_station_id, taxon, taxon_valid_name) |> 
+  summarize(p_cover = sum(p_cover)) |> 
+  ungroup() |> 
+  group_by(taxon_valid_name) |> 
+  summarize(avg_cover = mean(p_cover)) |> 
+  arrange(desc(avg_cover)) |> 
+  left_join(cover_by_taxa_and_sublocation |> 
+              pivot_wider(values_from = avg_cover, 
+                          names_from = sublocation)) 
+```
+### PCOA
+
+```{r eval = T, include = T}
+library(vegan)
+
+cover_dist <- vegan::vegdist(as.matrix(cover_by_station_wide), 
+                             method = "bray") 
+
+cover_pcoa_c <- vegan::dbrda(cover_dist ~ habitat + sublocation, 
+                             data = uvs_meta %>% 
+                               distinct(ps_station_id, sublocation, habitat),
+                             dist = "bray", 
+                             add = "lingoes")
+
+cover_pcoa_c_env_fit <- vegan::envfit(cover_pcoa_c, 
+                                      uvs_meta %>% 
+                               distinct(ps_station_id, sublocation, habitat))
+
+cover_pcoa_c_spp_fit <- vegan::envfit(cover_pcoa_c, 
+                                      cover_by_station_wide)
+
+cover_pcoa_c_spp_scores <- cover_pcoa_c_spp_fit %>% 
+  vegan::scores("vectors") %>% 
+  as_tibble(rownames = "ps_taxon_code") %>% 
+  mutate(r = cover_pcoa_c_spp_fit$vectors$r,
+         p = cover_pcoa_c_spp_fit$vectors$pvals) %>% 
+  filter(p < 0.05, r > 0.1)
+
+cover_pcoa_c_axis <- BiodiversityR::axis.long(cover_pcoa_c, choices = c(1, 2))
+
+cover_pcoa_c_site_scores <- vegan::scores(cover_pcoa_c)$sites %>% 
+  as_tibble(rownames = "ps_station_id") %>% 
+  left_join(uvs_meta)
+
+anova(cover_pcoa_c) # overall test of the significant of the analysis
+anova(cover_pcoa_c, by = "axis", perm.max = 500) # test axes for significance
+anova(cover_pcoa_c, by = "terms", perm.max = 1000) # test for sign. environ. variables
+```
+
+```{r, eval = T, include = T}
+cover_by_site_and_taxa_adonis <- vegan::adonis2(cover_dist ~  sublocation + habitat, 
+                                                data = uvs_meta %>% 
+                                                  distinct(ps_station_id, sublocation, habitat),
+                                                by = "margin",
+                                                method = "euclidean")
+
+broom::tidy(cover_by_site_and_taxa_adonis) %>% 
+  mutate_if(is.numeric, round, 3) %>% 
+  reactable::reactable(defaultColDef = reactable::colDef(
+    header = function(value) gsub("_", " ", value, fixed = TRUE),
+    cell = function(value) format(value, nsmall = 1),
+    align = "center",
+    minWidth = 70,
+    aggregate = "sum",
+    headerStyle = list(background = "#f7f7f8")),
+    bordered = TRUE,
+    highlight = TRUE) %>% 
+  reactablefmtr::add_title(title = "Benthic cover by group adonis model")
+```
+
+```{r, eval = T, include = T}
+ggplot() +
+  geom_vline(xintercept = c(0), color = "grey70", linetype = 2) +
+  geom_hline(yintercept = c(0), color = "grey70", linetype = 2) +  
+  scale_x_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  scale_y_continuous(sec.axis = dup_axis(labels=NULL, name=NULL)) +
+  geom_point(data = cover_pcoa_c_site_scores,
+             aes(x = dbRDA1, y = dbRDA2, col = sublocation)) +
+  labs(x = cover_pcoa_c_axis$label[1], y = cover_pcoa_c_axis$label[2])+
+  geom_segment(data = cover_pcoa_c_spp_scores %>% 
+                 filter(p < 0.05, r > 0.45), 
+               aes(x = 0, y = 0, xend = dbRDA1*3, yend = dbRDA2*3, alpha = r), 
+               colour = "black", 
+               size = 0.2, 
+               arrow = arrow(length = unit(0.01, "npc"), 
+                             type = 'open', ends = "last"))+
+      ggrepel::geom_text_repel(data = cover_pcoa_c_spp_scores %>% 
+                                 mutate(ps_taxon_code = if_else(str_detect(ps_taxon_code, "CCA"),
+                                                                "CCA", ps_taxon_code)) |> 
+                                 filter(p < 0.05, r > 0.45), 
+                               aes(x=dbRDA1*3, y=dbRDA2*3, label = ps_taxon_code, alpha = r),
+                               colour="black",
+                               show.legend = F) +
+      coord_fixed(ratio=1)+
+      labs(color = "", alpha = bquote('R'^'2'))+
+      ggforce::geom_mark_ellipse(data = cover_pcoa_c_site_scores, 
+                                 aes(x=dbRDA1, y = dbRDA2, colour = sublocation, 
+                                     fill=after_scale(alpha(colour, 0.01))), 
+                                 expand=0, size=0.2, show.legend=FALSE)+
+      theme(panel.background = element_blank(),
+            panel.border = element_blank(),
+            panel.grid = element_blank(),
+            axis.line = element_line("gray25"),
+            text = element_text(size = 12, family = "Arial"),
+            axis.text = element_text(size = 10, colour = "gray25"),
+            axis.title = element_text(size = 12, colour = "gray25"),
+            legend.key = element_blank())+
+      PristineSeasR::scale_color_pristine_seas(palette = "alternative")+
+      scale_alpha(range = c(0.6,1))
+
+ggsave(file.path(exp_path, "figures", "uvs_benthos_pcoa_by_location.png"), width = 13)
+```
+
+
+# Cuadrats
+
+```{r read_cuadrats_data}
+cuadrats <- readxl::read_xlsx(file.path(exp_path,
+                                            "data/primary/raw/inverts/COL_cuadrats_fieldsheet.xlsx"),
+                                  sheet = "data",
+                                  n_max = 3, 
+                                  col_names = FALSE) %>%
+  janitor::clean_names() %>%
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble() %>% 
+  remove_rownames() %>% 
+  janitor::clean_names() |> 
+  set_names(c("station_number", "depth_m", "cuadrat")) |> 
+  group_by(station_number) |> 
+  mutate(depth_m = as.numeric(depth_m)) |> 
+  ungroup() |> 
+  transmute(ps_station_id = paste0("COL_uvs_", 
+                                formatC(parse_number(station_number), 
+                                        width = 2, 
+                                        flag = 0)),
+            transect_type = "Cuadrat",
+            diver = "KB",
+            depth_m = depth_m,
+            cuadrat)
+
+cuadrat_data <- readxl::read_xlsx(file.path(exp_path,
+                                       "data/primary/raw/inverts/COL_cuadrats_fieldsheet.xlsx"),
+                             skip = 3, 
+                             col_names = F, 
+                             sheet = "data",
+                             range = "A5:JU32") %>% 
+  janitor::clean_names() %>% 
+  filter(!is.na(x1), x1 != "TOTAL") %>% 
+  column_to_rownames(var = "x1") %>% 
+  t() %>% 
+  as_tibble()
+
+cuadrat_data <- cuadrats |> 
+  cbind(cuadrat_data) %>% 
+  pivot_longer(-c(ps_station_id, transect_type, diver, depth_m, cuadrat), 
+               names_to = "taxon", 
+               values_to = "pts") %>% 
+  replace_na(list(pts = 0)) %>% 
+  group_by(ps_station_id, diver, depth_m, cuadrat, taxon) %>% 
+  summarise(pts = sum(pts)) %>% 
+  ungroup() 
+```
+
+```{r}
+cuadrat_taxa <- cuadrat_data |> 
+  distinct(taxon) |> 
+  left_join(benthos_taxa)
+
+cuadrat_taxa |> 
+  filter(!taxon %in% summary_by_taxa$taxon,
+         #!taxon %in% benthos_taxa$taxon,
+         !str_detect(taxon, "%"))
+
+benthos_taxa |> 
+  filter(!taxon %in% cuadrat_taxa$taxon,
+         !taxon %in% summary_by_taxa$taxon)
+```
+
+```{r}
+benthos_taxa |> 
+    select(filo = phylum, clase = class, orden = order, familia = family,  
+         especie = taxon_valid_name, grupo_trofico = grupo) |> 
+  arrange(filo, clase, orden, familia) |> 
+  write_csv(file.path(exp_path, "reports/Tribuga/supplement/SM3_inverts_taxa.csv"))
+```
+
+```{r}
+benthos_taxa |> 
+  filter(!is.na(class)) |> 
+  group_by(class) |> 
+  summarize(n_taxa = n_distinct(taxon)) |> 
+  arrange(desc(n_taxa)) |> 
+  mutate(class = case_when(class == "Anthozoa" ~ "Corales (Anthozoa)",
+                           class == "Demospongiae" ~ "Esponjas (Demospongiae)",
+                           class == "Florideophyceae" ~ "Algas rojas (Florideophyceae)",
+                           class == "Phaeophyceae" ~ "Algas pardas (Phaeophyceae)",
+                           class == "Gastropoda" ~ "Caracoles y babosas (Gastropoda)",
+                           class == "Ascidiacea" ~ "Ascidias (Ascidiacea)",
+                           class == "Bivalvia" ~ "Bivalvos (Bivalvia)",
+                           class == "Hydrozoa" ~ "Hidroides (Hydrozoa)",
+                           class == "Echinoidea" ~ "Erizos (Echinoidea)",
+                           class == "Polychaeta" ~ "Gusanos (Polychaeta)",
+                           class == "Ophiuroidea" ~ "Estrellas quebradizas (Ophiuroidea)",
+                           class == "Malacostraca" ~ "Cangrejos y langostas (Malacostraca)",
+                           class == "Holothuroidea" ~ "Pepinos de mar (Holothuroidea)",
+                           class == "Cephalopoda" ~ "Pulpos y calamares (Cephalopoda)",
+                           class == "Ateroidea" ~ "Estrellas (Ateroidea)",
+                           TRUE ~ class)) |>
+  ggplot()+
+  geom_col(aes(x = fct_reorder(class, n_taxa),
+               y = n_taxa,
+               fill = n_taxa), show.legend = F)+
+  coord_flip()+
+  scale_fill_viridis_c()+
+  labs(x = "", y = "")+
+  bbplot::bbc_style()
+  
+ggsave(file.path(exp_path, "figures", "tribuga_benthos_diversity.png"), width = 13)
+ggsave(file.path(exp_path, "reports/Tribuga/Assets", "tribuga_benthos_diversity.pdf"), width = 13)
+```
+
+
+# Invertebrados moviles
+
+```{r}
+movile <- benthos_taxa |> 
+  filter(grupo == "Invertebrado móvil") 
+  
+movile |> 
+  summarize(n_distinct(taxon), n_distinct(family))
+
+movile |> 
+  group_by(class) |> 
+  summarize(n_taxa = n_distinct(taxon)) |> 
+  arrange(class, desc(n_taxa))
+```
+
+```{r}
+library(gt)
+
+movile |> 
+  select(phylum, class, order, family, genus, taxon_valid_name) |> 
+  arrange(phylum, class, order, family, genus) |> 
+    gt() |> 
+    tab_header(
+    title = "Invertebrados moviles registrados en el Golfo de Tribugá") |> 
+  tab_style(style = list(
+      cell_text(style = "italic")),
+    locations = cells_body(columns = taxon_valid_name)) |> 
+    gt::gtsave(file.path(exp_path, "reports/Tribuga/tables/tbl_movile_inverts.docx"))
+
+```
+
+```{r}
+cuadrat_data |> 
+  filter(taxon %in% movile$taxon) |> 
+  group_by(ps_station_id, taxon) |> 
+  summarize(pts = sum(pts)) |> 
+  ungroup() |> 
+  arrange(desc(pts))
+```
+
+
+```{r}
+fish_summary <- read_csv(file.path(exp_path, "data/primary/output/uvs_fish_station_summary.csv")) |>
+  select(-region, -nombre) |> 
+  rename(fish_n_taxa = n_taxa, fish_H = H, fish_ind_m2 = ind_m2, fish_g_m2 = gr_m2 )
+
+station_summary |> 
+  select(-evenness, -habitat) |> 
+  rename(region = sublocation, nombre = site_name, latitud = lat, longitud = lon, benthic_H = H, benthic_n_taxa = richness) |> 
+  left_join(fish_summary) |> 
+  mutate_if(is.numeric, round, 2) |> 
+  write_csv(file.path(exp_path, "reports/Tribuga/supplement/SM5_uvs_station_summary.csv"))
+  write_csv(file.path(exp_path, "data/primary/output/uvs_station_summary.csv"))
+```
+
