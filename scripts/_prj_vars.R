@@ -80,3 +80,22 @@ coalesce_join <- function(x, y,
 
   dplyr::bind_cols(joined, coalesced)[cols]
 }
+
+
+cabo_stations <- c("COL_2022_birds_48","COL_2022_birds_49", "COL_2022_birds_50", "COL_2022_birds_58", "COL_2022_birds_59",
+                   "COL_2022_dscm_24", "COL_2022_dscm_26",
+                   "COL_2022_edna_077", "COL_2022_edna_080","COL_2022_edna_081", "COL_2022_edna_082",
+                   "COL_2022_meso_01", "COL_2022_meso_02",
+                   "COL_2022_pcam_23", "COL_2022_pcam_25",
+                   "COL_2022_sub_15", "COL_2022_sub_16",
+                   "COL_2022_uvs_03","COL_2022_uvs_09", "COL_2022_uvs_10", "COL_2022_uvs_14", "COL_2022_uvs_15", "COL_2022_uvs_16",
+                   "COL_2022_ysi_08","COL_2022_ysi_13","COL_2022_ysi_14","COL_2022_ysi_18","COL_2022_ysi_19","COL_2022_ysi_20")
+
+utria_stations <- c("COL_2022_birds_45", "COL_2022_birds_46", "COL_2022_birds_63", "COL_2022_birds_64", "COL_2022_birds_65", "COL_2022_birds_66",
+                    "COL_2022_birds_67", "COL_2022_birds_68", "COL_2022_birds_69",
+                    "COL_2022_dscm_29", "COL_2022_dscm_30","COL_2022_dscm_31", "COL_2022_dscm_32",
+                    "COL_2022_edna_075", "COL_2022_edna_076", "COL_2022_edna_084", "COL_2022_edna_085",
+                    "COL_2022_pcam_27",
+                    "COL_2022_sub_07", "COL_2022_sub_18",
+                    "COL_2022_uvs_06","COL_2022_uvs_07", "COL_2022_uvs_08", "COL_2022_uvs_18", "COL_2022_uvs_19", "COL_2022_uvs_20",
+                    "COL_2022_ysi_11","COL_2022_ysi_12","COL_2022_ysi_22","COL_2022_ysi_23")

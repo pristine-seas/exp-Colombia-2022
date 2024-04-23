@@ -1,0 +1,206 @@
+---
+title: "Deep sea cameras"
+number-sections: false
+date: today
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: right
+---
+
+```{r, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+library(paletteer)
+library(sf)
+library(bigrquery)
+library(gt)
+library(tidyverse)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_id <- "COL_2022"
+
+exp_path <- file.path(ps_science_path, "expeditions", "COL-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+```{r sublocs, eval = TRUE, include = T}
+cabo_stations <- c("COL_2022_birds_48","COL_2022_birds_49", "COL_2022_birds_50", "COL_2022_birds_58", "COL_2022_birds_59",
+                   "COL_2022_dscm_24", "COL_2022_dscm_26",
+                   "COL_2022_edna_077", "COL_2022_edna_080","COL_2022_edna_081", "COL_2022_edna_082",
+                   "COL_2022_meso_01", "COL_2022_meso_02",
+                   "COL_2022_pcam_23", "COL_2022_pcam_25",
+                   "COL_2022_sub_15", "COL_2022_sub_16",
+                   "COL_2022_uvs_03","COL_2022_uvs_09", "COL_2022_uvs_10", "COL_2022_uvs_14", "COL_2022_uvs_15", "COL_2022_uvs_16",
+                   "COL_2022_ysi_08","COL_2022_ysi_13","COL_2022_ysi_14","COL_2022_ysi_18","COL_2022_ysi_19","COL_2022_ysi_20")
+
+utria_stations <- c("COL_2022_birds_45", "COL_2022_birds_46", "COL_2022_birds_63", "COL_2022_birds_64", "COL_2022_birds_65", "COL_2022_birds_66",
+                    "COL_2022_birds_67", "COL_2022_birds_68", "COL_2022_birds_69",
+                    "COL_2022_dscm_29", "COL_2022_dscm_30","COL_2022_dscm_31", "COL_2022_dscm_32",
+                    "COL_2022_edna_075", "COL_2022_edna_076", "COL_2022_edna_084", "COL_2022_edna_085",
+                    "COL_2022_pcam_27",
+                    "COL_2022_sub_07", "COL_2022_sub_18",
+                    "COL_2022_uvs_06","COL_2022_uvs_07", "COL_2022_uvs_08", "COL_2022_uvs_18", "COL_2022_uvs_19", "COL_2022_uvs_20",
+                    "COL_2022_ysi_11","COL_2022_ysi_12","COL_2022_ysi_22","COL_2022_ysi_23")
+```
+
+```{r clean, eval = TRUE, include = T}
+
+dscm_meta <- read_csv(file.path(exp_path, 
+                                "data/primary/raw",
+                                "dscm","_DSC_Colombia_2022_DEPLOYMENT LOG.csv"), 
+                      trim_ws = T, skip_empty_rows = T) %>% 
+  janitor::clean_names() |> 
+  filter(!is.na(ps_station_id)) |> 
+  rename(ps_site_id = ps_station_id,
+         extech_deployment_id = deployment_id_do_not_edit_this_autopopulates_from_the_next_3_columns,
+         deployment_lon = deployment_longitude_ddd_ddddd,
+         deployment_lat = deployment_latitude_ddd_ddddd,
+         recovery_lon = recovery_longitude_ddd_ddddd,
+         recovery_lat = recovery_latitude_ddd_ddddd,
+         bottom_type = habitat, 
+         mission_duration = mission_duration_hh_mm,
+         recording_time = total_recording_time_hh_mm,
+         extech_expedition_id = expedition_id,
+         bait_kg = bait_weight_kg,
+         ballast_type = anchor_material,
+         ballast_kg = anchor_weight_kg,
+         dscm_id = device_id,
+         notes = deployment_remarks) 
+
+dscm_meta <- dscm_meta |> 
+  mutate(lead_operator = "Whitney Goodell",
+         method = "Deep sea camera",
+         ps_expedition_id = exp_id,
+         deployment_lat = as.numeric(deployment_lat),
+         deployment_lon = as.numeric(deployment_lon),
+         recovery_lat = as.numeric(recovery_lat),
+         recovery_lon = as.numeric(recovery_lon),
+         max_depth_m = round(as.numeric(max_depth_m)),
+         ballast_kg = round(as.numeric(ballast_kg)),
+         bait_kg = round(as.numeric(bait_kg)),
+         deployment_time = lubridate::ymd_hm(mission_start_time_utc_yyyymmddh_hmm),
+         recovery_time = lubridate::ymd_hm(recovery_time_utc_yyyymmddh_hmm),
+         deployment_date = lubridate::as_date(deployment_time),
+         recovery_date = lubridate::as_date(recovery_time),
+         location = coalesce(locality, island, island_group)) 
+
+dscm_meta <- dscm_meta |> 
+  select(ps_expedition_id, method, ps_site_id, location, 
+         deployment_date, deployment_time, deployment_lon, deployment_lat, 
+         recovery_date, recovery_time, recovery_lon, recovery_lat,
+         mission_duration, recording_time,
+         max_depth_m,
+         bottom_type,
+         bait_type, bait_kg,
+         ballast_type, ballast_kg,
+         dscm_id, extech_expedition_id, extech_deployment_id,
+         lead_operator, 
+         highlights,
+         everything(),
+         -water_body, -mission_start_time_utc_yyyymmddh_hmm,-island, -island_group, -locality, -collaborator_cruise_id, -country, -sub_location,
+         -recovery_time_utc_yyyymmddh_hmm, -max_depth_m_3, -max_depth_m_2, -x32) |> 
+  arrange(desc(deployment_date)) 
+
+dscm_meta <- dscm_meta |> 
+  arrange(deployment_date, deployment_time) |> 
+  mutate(ps_site_id = paste0("COL_2022_dscm_", formatC(row_number(), width = 2, flag = 0)),
+         location = case_when(deployment_date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              deployment_date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(deployment_date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 deployment_date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 deployment_date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 deployment_date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 deployment_date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 deployment_date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla")) |> 
+  mutate(sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_site_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_site_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation)) |> 
+  relocate(sublocation, .after = "location")
+```
+
+```{r dscm_map, eval = TRUE, include = T}
+tmp <- dscm_meta |> 
+  filter(!is.na(max_depth_m)) |> 
+  st_as_sf(coords = c("deployment_lon", "deployment_lat"), crs = 4326) |> 
+  group_by(method, ps_site_id, location, max_depth_m, geometry) 
+
+mapview::mapview(tmp,
+                 zcol = c(depth_m = "max_depth_m"), 
+                 legend = TRUE,
+                 map.types = c("Esri.WorldImagery"),
+                 layer.name = "Depth (m)",
+                 popup = leafpop::popupTable(tmp,
+                                      zcol = c("method",
+                                               "ps_site_id",
+                                               "location",
+                                               "max_depth_m")))
+```
+
+```{r dscm_table, eval = TRUE, include = T}
+dscm_meta |> 
+  filter(!is.na(max_depth_m)) |> 
+  mutate(strata = case_when(max_depth_m < 500 ~ "<500m",
+                            max_depth_m < 1000 ~ "500-1000m",
+                            max_depth_m < 2000 ~ "1000-2000m",
+                            max_depth_m >= 2000 ~ "> 2000m")) |> 
+  group_by(location, strata) |> 
+  summarize(n_stations = n_distinct(ps_site_id),
+            mean_max_depth_m = round(mean(max_depth_m, na.rm = T),1),
+            min_max_depth_m = min(max_depth_m, na.rm = T),
+            max_max_depth_m = max(max_depth_m, na.rm = T)) |> 
+  ungroup() |> 
+  mutate_if(is.numeric, round, 3) |> 
+  gt::gt(groupname_col  = "location", rowname_col = "strata") |> 
+  tab_spanner(label = "Depth", columns = contains("depth")) |> 
+  grand_summary_rows(columns  = contains(c("n_stations")),
+                     fns = list(list(label = md("**Grand total**"), fn = "sum")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("mean_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "mean")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("min_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "min")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("max_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "max")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  tab_header(title = "Number of dropcam deployments per location and depth") |> 
+  opt_align_table_header(align = "left") |> 
+  tab_style(locations = cells_grand_summary(),
+            style = cell_fill(color = "lightblue" |> adjust_luminance(steps = +2))) |> 
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_row_groups()) |> 
+  tab_options(ihtml.use_compact_mode = TRUE,
+              data_row.padding = px(5)) |> 
+  cols_label("n_stations" ~ "# Deployments") |> 
+  cols_label_with(fn = ~str_extract(.x, "[^_]+") |> 
+                    str_to_sentence()) 
+```
+
+```{r dscm_NAs, eval = TRUE, include = T}
+naniar::vis_miss(dscm_meta)
+```
+
+```{r dscm_export, eval = F}
+dscm_colnames <- tbl(bq_connection, "pristine-seas.deep_sea_cameras.deployments") |> 
+  colnames() 
+
+dscm_meta <- dscm_meta |> 
+  select(any_of(dscm_colnames))
+
+bigrquery::bq_table_upload("pristine-seas.deep_sea_cameras.deployments", 
+                           values = dscm_meta, fields = dscm_meta, write_disposition = 'WRITE_APPEND')
+```
