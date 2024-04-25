@@ -1,0 +1,206 @@
+---
+title: "Submersible"
+number-sections: false
+date: today
+format: 
+  html:
+    self-contained: true
+    code-fold: true
+    toc: true
+    toc-location: right
+---
+
+```{r, message = F, warning = F, fig.width = 10, fig.height = 10, echo = F}
+library(paletteer)
+library(sf)
+library(bigrquery)
+library(gt)
+library(tidyverse)
+
+knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
+
+PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
+
+exp_id <- "COL_2022"
+
+exp_path <- file.path(ps_science_path, "expeditions", "COL-2022")
+
+ps_data_path <- file.path(ps_science_path, "datasets/")
+
+bigrquery::bq_auth(email = "marine.data.science@ngs.org")
+
+bq_connection <- DBI::dbConnect(bigrquery::bigquery(), project = "pristine-seas")
+```
+
+# Metadata
+
+```{r sublocs, eval = TRUE, include = T}
+cabo_stations <- c("COL_2022_birds_48","COL_2022_birds_49", "COL_2022_birds_50", "COL_2022_birds_58", "COL_2022_birds_59",
+                   "COL_2022_dscm_24", "COL_2022_dscm_26",
+                   "COL_2022_edna_077", "COL_2022_edna_080","COL_2022_edna_081", "COL_2022_edna_082",
+                   "COL_2022_meso_01", "COL_2022_meso_02",
+                   "COL_2022_pcam_23", "COL_2022_pcam_25",
+                   "COL_2022_sub_15", "COL_2022_sub_16",
+                   "COL_2022_uvs_03","COL_2022_uvs_09", "COL_2022_uvs_10", "COL_2022_uvs_14", "COL_2022_uvs_15", "COL_2022_uvs_16",
+                   "COL_2022_ysi_08","COL_2022_ysi_13","COL_2022_ysi_14","COL_2022_ysi_18","COL_2022_ysi_19","COL_2022_ysi_20")
+
+utria_stations <- c("COL_2022_birds_45", "COL_2022_birds_46", "COL_2022_birds_63", "COL_2022_birds_64", "COL_2022_birds_65", "COL_2022_birds_66",
+                    "COL_2022_birds_67", "COL_2022_birds_68", "COL_2022_birds_69",
+                    "COL_2022_dscm_29", "COL_2022_dscm_30","COL_2022_dscm_31", "COL_2022_dscm_32",
+                    "COL_2022_edna_075", "COL_2022_edna_076", "COL_2022_edna_084", "COL_2022_edna_085",
+                    "COL_2022_pcam_27",
+                    "COL_2022_sub_07", "COL_2022_sub_18",
+                    "COL_2022_uvs_06","COL_2022_uvs_07", "COL_2022_uvs_08", "COL_2022_uvs_18", "COL_2022_uvs_19", "COL_2022_uvs_20",
+                    "COL_2022_ysi_11","COL_2022_ysi_12","COL_2022_ysi_22","COL_2022_ysi_23")
+```
+
+```{r, eval = TRUE, include = T}
+sub_fieldbook <- readxl::read_excel(file.path(exp_path, 
+                                        paste0("data/primary/raw/sub/", exp_id, "_sub_metadata.xlsx"))) |> 
+  as_tibble() |> 
+  janitor::clean_names() |> 
+  rename(ps_site_id = ps_station_id,
+         dive_start_time = dive_start,
+         dive_end_time = resurface,
+         max_depth_m = max_depth,
+         temp_max_depth = max_depth_temp,
+         deepsee_dive_id = deepsee_dive_number)
+
+sub_meta <- sub_fieldbook %>% 
+  mutate(ps_expedition_id = "COL_2022", 
+         method = "Submersible dive",
+         ps_site_id = str_replace(ps_site_id, "COL", "COL_2022"),
+         bottom_time = hms::as_hms(bottom_time),
+         collected = if_else(dive_type == "collecting", TRUE, FALSE),
+         collected = if_else(is.na(collected), FALSE, collected),
+         therm_start = if_else(is.na(therm_start), NA_real_, therm_start),
+         therm_end = if_else(is.na(therm_end), NA_real_, therm_end),
+         dive_type = if_else(is.na(dive_type), NA_character_, dive_type),
+         notes = NA_character_,
+         temp_max_depth = as.numeric(temp_max_depth),
+         dive_start_time = lubridate::ymd_hms(dive_start_time, tz = "America/Bogota"),
+         dive_end_time = lubridate::ymd_hms(dive_end_time, tz = "America/Bogota")) |>  
+  mutate_at(vars(therm_end, therm_start), .funs = as.numeric) %>% 
+  mutate_at(vars(bottom_time),.funs = hms::as_hms) |> 
+  mutate(date = ymd(date))  |> 
+  mutate_at(vars(gps_bottom_start, gps_bottom_end, gps_surface_start, gps_surface_end), 
+            ~str_replace(.x, "N", "N;")) %>% 
+  separate(gps_surface_start, into = c("surface_start_lat", "surface_start_lon"), sep = ";") %>% 
+  separate(gps_surface_end, into = c("surface_end_lat", "surface_end_lon"), sep = ";") %>% 
+  separate(gps_bottom_start, into = c("bottom_start_lat", "bottom_start_lon"), sep = ";") %>% 
+  separate(gps_bottom_end, into = c("bottom_end_lat", "bottom_end_lon"), sep = ";") |> 
+  mutate_at(vars(contains(c("lat", "lon"))), 
+            ~ str_remove_all(.x, "N|W") %>% 
+              str_squish() %>% 
+              str_replace_all(pattern = "\\'", replacement =  " ") ) |> 
+  mutate_at(vars(contains(c("lat", "lon"))), 
+            ~ measurements::conv_unit(.x, 
+                                      from = 'deg_dec_min', to = 'dec_deg') %>% 
+              as.numeric() %>% 
+              round(5)) |> 
+  mutate(across(c(ends_with("lon")),
+                ~ -1*.)) |> 
+  mutate(location = case_when(date < ymd("2022-03-17") ~ "Offshore Pacific",
+                              date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                              TRUE ~ "Caribbean"),
+         sublocation = case_when(date <= ymd("2022-03-06") ~ "Navigator bank", 
+                                 date == ymd("2022-03-07") ~ "SW Malpelo ridge", 
+                                 date <= ymd("2022-03-10") ~ "NE Malpelo ridge", 
+                                 date < ymd("2022-03-17") ~ "Colinas y Lomas", 
+                                 date <= ymd("2022-03-30") ~ "Golfo de Tribuga",
+                                 date <= ymd("2022-04-14") ~ "Bajo Nuevo",
+                                 TRUE ~ "Serranilla"),
+         sublocation = if_else(location == "Golfo de Tribuga",
+                               case_when(ps_site_id %in% cabo_stations ~ "Cabo Corrientes",
+                                         ps_site_id %in% utria_stations ~ "PNN Utria",
+                                         TRUE ~ "DRMI"), 
+                               sublocation)) 
+```
+
+```{r sub, eval = TRUE, include = T}
+sub_meta <- sub_meta |> 
+  select(ps_expedition_id, method, ps_site_id, location, sublocation,  date, 
+         dive_start_time, dive_end_time, bottom_time,
+         surface_start_lon, surface_start_lat,  bottom_start_lon, bottom_start_lat,
+         bottom_end_lon, bottom_end_lat, surface_end_lon, surface_end_lat, 
+         max_depth_m, temp_max_depth, therm_start, therm_end, 
+         dive_type, collected, deepsee_dive_id, 
+         pilot, observer_1, observer_2,
+         notes,
+         everything()) 
+
+date(sub_meta$dive_start_time) <- sub_meta$date
+date(sub_meta$dive_end_time) <- sub_meta$date
+
+sub_meta$dive_start_time <- with_tz(sub_meta$dive_start_time, "UTC")
+sub_meta$dive_end_time <- with_tz(sub_meta$dive_end_time, "UTC")
+```
+
+```{r sub_map, eval = TRUE, include = T}
+tmp <- sub_meta |> 
+  filter(!is.na(max_depth_m),
+         !is.na(surface_start_lat)) |> 
+  st_as_sf(coords = c("surface_start_lon", "surface_start_lat"), crs = 4326) |> 
+  group_by(method, ps_site_id, location, max_depth_m, geometry) 
+
+mapview::mapview(tmp,
+                 zcol = c(depth_m = "max_depth_m"), 
+                 legend = TRUE,
+                 map.types = c("Esri.WorldImagery"),
+                 layer.name = "Depth (m)",
+                 popup = leafpop::popupTable(tmp,
+                                      zcol = c("method",
+                                               "ps_site_id",
+                                               "location",
+                                               "max_depth_m")))
+```
+
+```{r sub_table, eval = TRUE, include = T}
+sub_meta |> 
+  filter(!is.na(max_depth_m)) |> 
+  mutate(strata = case_when(max_depth_m < 500 ~ "<500m",
+                            max_depth_m < 1000 ~ "500-1000m",
+                            max_depth_m < 2000 ~ "1000-2000m",
+                            max_depth_m >= 2000 ~ "> 2000m")) |> 
+  group_by(location, strata) |> 
+  summarize(n_stations = n_distinct(ps_site_id),
+            mean_max_depth_m = round(mean(max_depth_m, na.rm = T),1),
+            min_max_depth_m = min(max_depth_m, na.rm = T),
+            max_max_depth_m = max(max_depth_m, na.rm = T)) |> 
+  ungroup() |> 
+  mutate_if(is.numeric, round, 3) |> 
+  gt::gt(groupname_col  = "location", rowname_col = "strata") |> 
+  tab_spanner(label = "Depth", columns = contains("depth")) |> 
+  grand_summary_rows(columns  = contains(c("n_stations")),
+                     fns = list(list(label = md("**Grand total**"), fn = "sum")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("mean_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "mean")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("min_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "min")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  grand_summary_rows(columns  = contains(c("max_max_depth_m")),
+                     fns = list(list(label = md("**Grand total**"), fn = "max")),
+                     fmt = ~ fmt_number(., decimals = 0, use_seps = FALSE)) |> 
+  tab_header(title = "Number of submersible dives per location and depth") |> 
+  opt_align_table_header(align = "left") |> 
+  tab_style(locations = cells_grand_summary(),
+            style = cell_fill(color = "lightblue" |> adjust_luminance(steps = +2))) |> 
+  tab_style(style = cell_text(weight = "bold"),
+            locations = cells_row_groups()) |> 
+  tab_options(ihtml.use_compact_mode = TRUE,
+              data_row.padding = px(5)) |> 
+  cols_label("n_stations" ~ "# Dives") |> 
+  cols_label_with(fn = ~str_extract(.x, "[^_]+") |> 
+                    str_to_sentence()) 
+```
+
+```{r sub_NAs, eval = TRUE, include = T}
+naniar::vis_miss(sub_meta)
+```
+
+```{r sub_export, eval = F}
+bigrquery::bq_table_upload("pristine-seas.submersible.deepsee_dives", 
+                           values = sub_meta, fields = sub_meta)
+```
