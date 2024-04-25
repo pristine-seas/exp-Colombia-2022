@@ -70,6 +70,7 @@ sub_meta <- sub_fieldbook %>%
   mutate(ps_expedition_id = "COL_2022", 
          method = "Submersible dive",
          ps_site_id = str_replace(ps_site_id, "COL", "COL_2022"),
+         deepsee_dive_id = as.integer(deepsee_dive_id),
          bottom_time = hms::as_hms(bottom_time),
          collected = if_else(dive_type == "collecting", TRUE, FALSE),
          collected = if_else(is.na(collected), FALSE, collected),
