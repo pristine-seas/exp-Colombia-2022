@@ -183,6 +183,125 @@ station_summary %>%
 ```
 
 ```{r}
+fish_data_by_station <- read_csv(file.path(ps_exp_path, 
+                                           "reports/Caribe/Anexos",                               "Tabla_S3_abundancia_y_biomasa_de_peces_por_taxon_por_estacion.csv"))
+
+fish_data_by_station |> 
+  filter(habitat != "seagrass beds") |> 
+  filter(family %in% c("Carangidae", "Lutjanidae") |
+           str_detect(taxon_sci_name, "Mycteroperca")) |> 
+  group_by(sublocation, family, ps_station_id) |> 
+  summarize(gr_m2 = sum(gr_m2)) |> 
+  ungroup() |> 
+  group_by(sublocation, family) |> 
+  summarize(gr_m2 = mean(gr_m2))
+
+tmp <- fish_data_by_station |> 
+  filter(habitat != "seagrass beds") |> 
+  group_by(sublocation, habitat, ps_station_id, family) |> 
+  summarize(n_ind = sum(n_ind, na.rm = T),
+            ind_m2 = sum(ind_m2, na.rm = T),
+            gr_m2 = sum(gr_m2, na.rm = T)) |> 
+  ungroup() |> 
+  group_by(sublocation, family) |> 
+  summarize(n_ind = mean(n_ind, na.rm = T),
+            ind_m2 = mean(ind_m2, na.rm = T),
+            gr_m2 = mean(gr_m2, na.rm = T)) |> 
+  ungroup() |> 
+  group_by(sublocation) |> 
+  mutate(f_biomass = 100*gr_m2/sum(gr_m2)) 
+
+tmp |> 
+  mutate(eat = case_when(family == "Lutjanidae" ~ "Pargos",
+                         family == "Serranidae" ~ "Meros",
+                         family == "Carangidae" ~ "Jureles",
+                         family == "Carcharhinidae" ~ "Tiburones",
+                         TRUE ~ NA_character_),
+         tmp = case_when(family == "Lutjanidae" ~ T,
+                         family == "Serranidae" ~ T,
+                         family == "Carangidae" ~ T,
+                         family == "Carcharhinidae" ~ T,
+                         TRUE ~ F)) |> 
+  ggplot(aes(sublocation, gr_m2))+
+  geom_col(aes(fill = fct_reorder(family, gr_m2, .na_rm = F),
+               alpha = tmp))+
+  paletteer::scale_fill_paletteer_d("ggsci::default_igv", direction = -1)+
+  scale_alpha_discrete(range = c(0.15, 1))+
+  ggthemes::theme_hc()+
+  theme(legend.position = "right")+
+  labs(fill = "", y = "Biomasa (g/m^2)",
+       x = "", 
+       title = "Biomasa de peces de arrecife por familia")
+
+ggsave("tst.pdf", height = 7, width = 8 )
+```
+
+```{r}
+trophic_info <- file.path("~/marine.data.science@ngs.org - Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/",
+          "DMA-2022", "data", "primary", "processed", "uvs_fish_taxa.csv") |> 
+  read_csv() |> 
+  distinct(taxon_valid_name, trophic_group) |> 
+  mutate(trophic_group = case_when(trophic_group %in% c("MI/P", "MI", 
+                                                        "SI", "INV") ~ "Invertivores",
+                                   trophic_group %in% c("Z") ~ "Planktivores",
+                                   trophic_group %in% c("P") ~ "Piscivores",
+                                   trophic_group %in% c("H") ~ "Herbivores",
+                                   TRUE ~ trophic_group)) 
+
+fish_data_by_station |> 
+  left_join(trophic_info, 
+            by = c("taxon_sci_name" = "taxon_valid_name")) |> 
+  #filter(is.na(trophic_group)) |> 
+  distinct(family, taxon_sci_name, trophic_group) |> 
+  write_csv("trophic_info.csv")
+
+tmp <- fish_data_by_station |> 
+  filter(habitat != "seagrass beds") |> 
+  left_join(trophic_info, 
+            by = c("taxon_sci_name" = "taxon_valid_name")) |> 
+  group_by(sublocation, habitat, ps_station_id, trophic_group) |> 
+  summarize(n_ind = sum(n_ind, na.rm = T),
+            ind_m2 = sum(ind_m2, na.rm = T),
+            gr_m2 = sum(gr_m2, na.rm = T)) |> 
+  ungroup() |> 
+  group_by(sublocation, trophic_group) |> 
+  summarize(n_ind = mean(n_ind, na.rm = T),
+            ind_m2 = mean(ind_m2, na.rm = T),
+            gr_m2 = mean(gr_m2, na.rm = T)) |> 
+  ungroup() |> 
+  group_by(sublocation) |> 
+  mutate(f_biomass = 100*gr_m2/sum(gr_m2)) 
+```
+
+```{r}
+parrots_ref <- readxl::read_xlsx("~/marine.data.science@ngs.org - Google Drive/My Drive/Pristine Seas/SCIENCE/datasets/jackson_2014_caribbean_reefs/tbl_2_report.xlsx") |> 
+  janitor::clean_names() |> 
+  select(territory = countryor_territory, location, parrots_gr_m2 = parrotfishbiomassafter1999_g_m2) |> 
+  filter(!is.na(parrots_gr_m2))
+
+parrots_ref |> 
+  tibble::add_case(territory = "Bajo Nuevo", 
+                   parrots_gr_m2 = 8.7) |> 
+  tibble::add_case(territory = "Serranilla", 
+                   parrots_gr_m2 = 9.1) |> 
+  group_by(territory) |> 
+  summarize(parrots_gr_m2 = mean(parrots_gr_m2)) |> 
+  ungroup() |> 
+  mutate(highlight = if_else(territory %in% c("Bajo Nuevo", "Serranilla"), "yes", "no")) |>
+  ggplot(aes(fct_reorder(territory, parrots_gr_m2), 
+             parrots_gr_m2, 
+             fill = highlight))+
+  geom_col( show.legend = F)+
+  coord_flip()+
+  labs(x = "", y = "Biomasa (g/m2)", title = "Estimativos regionales de biomasa de pez loro")+
+  scale_y_continuous(expand = c(0, 0))+
+  ggthemes::theme_hc()+
+  scale_fill_manual(values = c("yes" = "red", "no" = "grey"))
+
+ggsave("regional_loro.pdf", height = 5, width = 8)
+```
+
+```{r}
 station_summary <- read_csv(file.path(ps_exp_path, 
                                       "reports/Caribe/Anexos",
                                     "Tabla_S4_metricas_univariadas_de_peces_por_estacion.csv"))

@@ -3,7 +3,7 @@ ps_data_path <- "~/marine.data.science@ngs.org - Google Drive/My Drive/Pristine 
 
 #ps_exp_path <- "/Volumes/Colombia - 2022/"
 
-ps_exp_path <- "~/marine.data.science@ngs.org - Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/Colombia-2022/"
+ps_exp_path <- "~/marine.data.science@ngs.org - Google Drive/My Drive/Pristine Seas/SCIENCE/expeditions/COL-2022/"
 
 default_font_family <- "Arial"
 

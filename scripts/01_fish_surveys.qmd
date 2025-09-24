@@ -26,7 +26,7 @@ knitr::opts_chunk$set(eval = F, warning = F, message = F, include = F, echo = F)
 
 PristineSeasR::set_ps_paths(email = "marine.data.science@ngs.org")
 
-exp_path <- file.path(ps_science_path, "expeditions", "Colombia-2022")
+exp_path <- file.path(ps_science_path, "expeditions", "COL-2022")
 
 ps_data_path <- file.path(ps_science_path, "datasets/")
 
@@ -38,7 +38,7 @@ load(file = file.path(exp_path, "data",
 
 ```{r}
 metadata_tribuga <- read_csv(file.path(exp_path, "data", "primary", "processed/metadata", "exp_meta.csv")) |> 
-  filter(location == "Golfo de Tribuga") |> 
+  filter(location == "Caribbean") |> 
   mutate(method = case_when(method == "Shallow BRUVS" ~ "BRUVS somero",
                             method == "Submersible" ~ "Sumergible",
                             method == "Seabird transect" ~"Aves marinas",
@@ -289,8 +289,6 @@ taxa_by_family_and_trophic_group |>
 ```
 
 ## Biomass
-
-
 
 ```{r}
 biomass_by_taxa_and_station <- biomass_by_taxa_and_transect %>% 

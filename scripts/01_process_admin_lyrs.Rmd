@@ -20,7 +20,9 @@ library(ggspatial)
 ```
 
 ```{r}
-ps_data_path <- "/Volumes/ps-science/datasets/"
+ps_paths <- PristineSeasR::get_sci_drive_paths()
+
+#ps_data_path <- "/Volumes/ps-science/datasets/"
 
 ps_exp_path <- "/Volumes/Colombia - 2022/"
 
@@ -140,7 +142,9 @@ col_background_plot <- ggplot() +
 ```{r}
 col_eez_area_ha <- 92866000
 
-world_eezs <- sf::st_read(file.path(ps_data_path, "marine-regions", "eez_v11.gpkg")) %>%
+file.exists(file.path(p, "marine-regions", "eez_v11.gpkg"))
+
+world_eezs <- sf::st_read(file.path(ps_paths$datasets, "marine-regions", "eez_v11.gpkg")) %>%
   sf::st_wrap_dateline(options = c("WRAPDATELINE=YES", "DATELINEOFFSET=180"), quiet = TRUE) %>%
   janitor::clean_names()
 
@@ -156,6 +160,12 @@ colombia_eez <- colombia_eez %>%
 
 bajos_eez <- colombia_eez %>% 
   filter(mrgid %in% c(48985, 48984)) 
+
+bajos_eez |> write_sf(file.path(ps_paths$expeditions, "COL-2022", "data", "secondary", "processed", "bajos_eez.shp"))
+
+plot(bajos_eez)
+
+st_area(bajos_eez)/1000000 # in km
 ```
 
 ```{r}
