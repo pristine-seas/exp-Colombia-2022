@@ -680,17 +680,15 @@ cover_by_station_and_taxa <- clean_lpi |>
 
   # 3. Compute total contacts and SD across sections
   group_by(diver, ps_station_id, morphotaxon, accepted_name, accepted_aphia_id, functional_group, rank, family) |>
-  summarize(
-    total_contacts = sum(contacts),
-    pct_cover_sd = sd(pct_cover_section),
-    .groups = "drop"
-  ) |>
-
+  summarize(contacts = sum(contacts),
+            pct_cover_sd = sd(pct_cover_section),
+            .groups = "drop") |>
+  
   # 4. Compute compositional % cover
   group_by(ps_station_id) |>
-  mutate(pct_cover = 100 * total_contacts / sum(total_contacts)) |>
+  mutate(pct_cover = 100 * contacts / sum(contacts)) |>
   ungroup() |> 
-  filter(total_contacts > 0)
+  filter(contacts > 0)
 ```
 
 ```{r}
@@ -705,7 +703,7 @@ grps_order <- c("cyanobacteria", "eam","sediment|rubble|barren", "other", "turf"
                 "algae_erect","sponges", "soft_coral","cca", "hard_coral")
 
 cover_by_station_and_group <- cover_by_station_and_taxa |> 
-  mutate(functional_group = case_when(functional_group %in% c("bryozoans","worms","echinoderms", "molluscs", "hydrozoans", "ascidians", "other_cnidarians", "seagrass") ~ "other",
+  mutate(functional_group = case_when(functional_group %in% c("bryozoans","worms","echinoderms", "molluscs", "hydrozoans", "ascidians", "other_cnidarians") ~ "other",
                                       functional_group %in% c("hard_coral_dead") ~ "sediment|rubble|barren",
                                       TRUE ~ functional_group)) |> 
   group_by(region, subregion, ps_site_id, ps_station_id, depth_strata, functional_group) |> 
@@ -761,7 +759,7 @@ cover_by_station_and_group |>
   ggplot()+
   geom_col(aes(site, pct_cover, fill = functional_group))+
   facet_grid(depth_strata~region, scales = "free")+
-  scale_fill_manual(values = ps_colors("functional_groups"))+
+  scale_fill_manual(values = c(ps_colors("functional_groups"), "seagrass" = "green"))+
   ggthemes::theme_fivethirtyeight()+
   labs(x = NULL, y = "Benthic composition (% of station total)",
        fill = "Functional group",
@@ -783,7 +781,7 @@ cover_by_station_and_group |>
   ggplot()+
   geom_col(aes(x = depth_strata, y = pct_cover, fill = functional_group))+
   facet_wrap(~region , scales = "free")+
-  scale_fill_manual(values = ps_colors("functional_groups"))+
+  scale_fill_manual(values = c(ps_colors("functional_groups"), "seagrass" = "green"))+
   ggthemes::theme_fivethirtyeight()+
   labs(x = NULL, y = "Benthic composition (% of station total)",
        fill = "Functional group",
@@ -795,7 +793,6 @@ cover_by_station_and_group |>
         legend.key.height = unit(4, "mm"),
         axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
 ```
-
 
 ```{r}
 #| label: fig-missingness-stations
@@ -850,7 +847,7 @@ library(RColorBrewer)
 # Identify major taxa based on average % cover (after filling with zeros)
 
 plot_df <- cover_by_station_and_taxa |> 
-  select(ps_station_id, morphotaxon, accepted_name, functional_group, accepted_aphia_id, rank, pct_cover, total_contacts) |> 
+  select(ps_station_id, morphotaxon, accepted_name, functional_group, accepted_aphia_id, rank, pct_cover, contacts) |> 
   complete(ps_station_id, 
            nesting(morphotaxon, accepted_name, functional_group, accepted_aphia_id, rank),
            fill = list(pct_cover = 0,
@@ -953,32 +950,44 @@ cat("  - Morphotaxa:", validation_summary$contacts$morphotaxon_count, "\n")
 cat("  - Unique species:", validation_summary$contacts$species_count, "\n\n")
 ```
 
+
 ```{r}
-cover_by_station_and_taxa <- cover_by_station_and_taxa |> 
-  rename(contacts = total_contacts)
+stations_tbl_colnames <- tbl(bq_connection, "uvs.lpi_stations") |> 
+  filter(!is.na(exp_id)) |> 
+  head() |> collect() |> colnames()
 
-station_summary <- station_summary |> 
-  select(ps_station_id, ps_site_id, exp_id, region, subregion, locality, 
-         habitat, exposure, divers, depth_m, depth_strata,
-         n_transects, survey_dist_m, n_points, total_morphotaxa = n_morphotaxa, pct_coral, pct_cca, pct_cyano, everything()) 
+# figure out which are missing
+missing_cols <- setdiff(stations_tbl_colnames, names(station_summary))
 
-clean_lpi <- clean_lpi |> 
-  select(ps_station_id, exp_id, diver, depth_m, transect_label, transect_section, morphotaxon, accepted_name, accepted_aphia_id, rank, family, functional_group, contacts, everything())
+# create them as NA
+station_summary <- station_summary |>
+  dplyr::mutate(!!!rlang::set_names(rep(list(NA), length(missing_cols)), missing_cols)) |>
+  # enforce order
+  dplyr::relocate(all_of(stations_tbl_colnames)) |> 
+  select(all_of(stations_tbl_colnames)) 
 
-write_csv(cover_by_station_and_taxa, file.path(exp_path, "data/primary/output/benthos/lpi_cover_by_station_and_taxa.csv"))
 write_csv(station_summary, file.path(exp_path, "data/primary/output/benthos/lpi_station_summary.csv"))
-write_csv(clean_lpi, file.path(exp_path, "data/primary/output/benthos/lpi_contacts.csv"))
 ```
 
 ```{r}
-station_summary |> 
-  filter(habitat != "seagrass") |> 
-  group_by(region, ps_site_id) |> 
-  summarise(across(contains("pct"), mean), .groups = "drop") |> 
-  ungroup() |> 
-  group_by(region) |> 
-  summarise(across(contains("pct"), mean), .groups = "drop") |> 
-  mutate_if(is.numeric, round, 1) 
+cover_tbl_colnames <- tbl(bq_connection, "uvs.lpi_cover_by_taxa") |> 
+  colnames()
+
+# figure out which are missing
+cover_missing_cols <- setdiff(cover_tbl_colnames, names(cover_by_station_and_taxa))
+
+write_csv(cover_by_station_and_taxa, file.path(exp_path, "data/primary/output/benthos/lpi_cover_by_station_and_taxa.csv"))
+```
+
+```{r}
+contact_tbl_colnames <- tbl(bq_connection, "uvs.lpi_contacts") |> 
+  colnames()
+
+clean_lpi <- clean_lpi |> 
+  mutate(notes = NA_character_) |> 
+  select(all_of(contact_tbl_colnames))
+
+write_csv(clean_lpi, file.path(exp_path, "data/primary/output/benthos/lpi_contacts.csv"))
 ```
 
 ### Upload to BigQuery
@@ -987,7 +996,7 @@ Finally, Upload the validated and processed data to BigQuery, maintaining data i
 
 ```{r}
 bq_table_upload(bq_table("pristine-seas", "uvs", "lpi_stations"),
-                values = station_summary,
+                values = yyy,
                 create_disposition = "CREATE_NEVER",
                 write_disposition = "WRITE_APPEND")
 
